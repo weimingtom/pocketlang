@@ -37,6 +37,17 @@
 // the build target (debug or release). Use ASSERT() for debug assertion and
 // use __ASSERT() for TODOs and assertions in public methods (to indicate that
 // the host application did something wrong).
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define __ASSERT(condition, message)                                 \
+  do {                                                               \
+    if (!(condition)) {                                              \
+      fprintf(stderr, "Assertion failed: %s\n\tat (%s:%i)\n",   \
+        message, __FILE__, __LINE__);                      \
+      DEBUG_BREAK();                                                 \
+      abort();                                                       \
+    }                                                                \
+  } while (false)
+#else
 #define __ASSERT(condition, message)                                 \
   do {                                                               \
     if (!(condition)) {                                              \
@@ -46,6 +57,7 @@
       abort();                                                       \
     }                                                                \
   } while (false)
+#endif
 
 #define NO_OP do {} while (false)
 

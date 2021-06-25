@@ -11,6 +11,10 @@
 #include "pk_vm.h"
 #include "pk_debug.h"
 
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define inline __inline
+#endif
+
 // The maximum number of variables (or global if compiling top level script)
 // to lookup from the compiling context. Also it's limited by it's opcode
 // which is using a single byte value to identify the local.
@@ -404,6 +408,9 @@ static OpInfo opcode_info[] = {
 // Internal error report function of the parseError() function.
 static void reportError(Compiler* compiler, const char* file, int line,
                         const char* fmt, va_list args) {
+  PKVM* vm;
+  char message[ERROR_MESSAGE_SIZE];
+  int length;
 
   // On REPL mode only the first error is reported.
   if (compiler->options && compiler->options->repl_mode &&
@@ -420,14 +427,17 @@ static void reportError(Compiler* compiler, const char* file, int line,
     return;
   }
 
-  PKVM* vm = compiler->vm;
+  vm = compiler->vm;
   if (vm->config.error_fn == NULL) return;
 
   // TODO: fix the buffer size. A non terminated large string could cause this
   // crash.
 
-  char message[ERROR_MESSAGE_SIZE];
-  int length = vsprintf(message, fmt, args);
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+  length = _vsnprintf(message, sizeof(message), fmt, args);
+#else
+  length = vsprintf(message, fmt, args);
+#endif
   __ASSERT(length < ERROR_MESSAGE_SIZE, "Error message buffer should not "
            "exceed the buffer");
   vm->config.error_fn(vm, PK_ERROR_COMPILE, file, line, message);
@@ -435,9 +445,10 @@ static void reportError(Compiler* compiler, const char* file, int line,
 
 // Error caused at the middle of lexing (and TK_ERROR will be lexed insted).
 static void lexError(Compiler* compiler, const char* fmt, ...) {
+  const char* path;
   va_list args;
   va_start(args, fmt);
-  const char* path = compiler->script->path->data;
+  path = compiler->script->path->data;
   reportError(compiler, path, compiler->current_line, fmt, args);
   va_end(args);
 }
@@ -445,15 +456,16 @@ static void lexError(Compiler* compiler, const char* fmt, ...) {
 // Error caused when parsing. The associated token assumed to be last consumed
 // which is [compiler->previous].
 static void parseError(Compiler* compiler, const char* fmt, ...) {
-
+  va_list args;
+  const char* path;
   Token* token = &compiler->previous;
 
   // Lex errors would repored earlier by lexError and lexed a TK_ERROR token.
   if (token->type == TK_ERROR) return;
 
-  va_list args;
+  
   va_start(args, fmt);
-  const char* path = compiler->script->path->data;
+  path = compiler->script->path->data;
   reportError(compiler, path, token->line, fmt, args);
   va_end(args);
 }
@@ -463,8 +475,9 @@ static void parseError(Compiler* compiler, const char* fmt, ...) {
 // need to pass the line number the error originated from.
 static void resolveError(Compiler* compiler, int line, const char* fmt, ...) {
   va_list args;
+  const char* path;
   va_start(args, fmt);
-  const char* path = compiler->script->path->data;
+  path = compiler->script->path->data;
   reportError(compiler, path, line, fmt, args);
   va_end(args);
 }
@@ -482,10 +495,12 @@ static bool matchChar(Compiler* compiler, char c);
 static bool matchLine(Compiler* compiler);
 
 static void eatString(Compiler* compiler, bool single_quote) {
+  char quote;
   pkByteBuffer buff;
+  Var string;
   pkByteBufferInit(&buff);
 
-  char quote = (single_quote) ? '\'' : '"';
+  quote = (single_quote) ? '\'' : '"';
 
   while (true) {
     char c = eatChar(compiler);
@@ -519,7 +534,7 @@ static void eatString(Compiler* compiler, bool single_quote) {
   }
 
   // '\0' will be added by varNewSring();
-  Var string = VAR_OBJ(newStringLength(compiler->vm, (const char*)buff.data,
+  string = VAR_OBJ(newStringLength(compiler->vm, (const char*)buff.data,
                        (uint32_t)buff.count));
 
   pkByteBufferClear(&buff, compiler->vm);
@@ -548,6 +563,10 @@ static char eatChar(Compiler* compiler) {
 
 // Complete lexing an identifier name.
 static void eatName(Compiler* compiler) {
+  const char* name_start;
+  TokenType type;
+  int length;
+  int i;
 
   char c = peekChar(compiler);
   while (utilIsName(c) || utilIsDigit(c)) {
@@ -555,12 +574,12 @@ static void eatName(Compiler* compiler) {
     c = peekChar(compiler);
   }
 
-  const char* name_start = compiler->token_start;
+  name_start = compiler->token_start;
 
-  TokenType type = TK_NAME;
+  type = TK_NAME;
 
-  int length = (int)(compiler->current_char - name_start);
-  for (int i = 0; _keywords[i].identifier != NULL; i++) {
+  length = (int)(compiler->current_char - name_start);
+  for (i = 0; _keywords[i].identifier != NULL; i++) {
     if (_keywords[i].length == length &&
       strncmp(name_start, _keywords[i].identifier, length) == 0) {
       type = _keywords[i].tk_type;
@@ -585,22 +604,24 @@ static void eatNumber(Compiler* compiler) {
 
   // Binary literal.
   if (c == '0' && peekChar(compiler) == 'b') {
-    eatChar(compiler); // Consume '0b'
+    uint64_t bin;
+	eatChar(compiler); // Consume '0b'
 
-    uint64_t bin = 0;
+    bin = 0;
     c = peekChar(compiler);
     if (!IS_BIN_CHAR(c)) {
       lexError(compiler, "Invalid binary literal.");
 
     } else {
       do {
-        // Consume the next digit.
+        int length;
+		// Consume the next digit.
         c = peekChar(compiler);
         if (!IS_BIN_CHAR(c)) break;
         eatChar(compiler);
 
         // Check the length of the binary literal.
-        int length = (int)(compiler->current_char - compiler->token_start);
+        length = (int)(compiler->current_char - compiler->token_start);
         if (length > STR_BIN_BUFF_SIZE - 2) { // -2: '-\0' 0b is in both side.
           lexError(compiler, "Binary literal is too long.");
           break;
@@ -611,12 +632,17 @@ static void eatNumber(Compiler* compiler) {
 
       } while (true);
     }
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+    value = VAR_NUM((double)(__int64)bin);
+#else
     value = VAR_NUM((double)bin);
+#endif
 
   } else if (c == '0' && peekChar(compiler) == 'x') {
-    eatChar(compiler); // Consume '0x'
+    uint64_t hex;
+	eatChar(compiler); // Consume '0x'
 
-    uint64_t hex = 0;
+    hex = 0;
     c = peekChar(compiler);
 
     // The first digit should be either hex digit.
@@ -625,27 +651,32 @@ static void eatNumber(Compiler* compiler) {
 
     } else {
       do {
+		int length;
+		uint8_t append_val;
         // Consume the next digit.
         c = peekChar(compiler);
         if (!IS_HEX_CHAR(c)) break;
         eatChar(compiler);
 
         // Check the length of the binary literal.
-        int length = (int)(compiler->current_char - compiler->token_start);
+        length = (int)(compiler->current_char - compiler->token_start);
         if (length > STR_HEX_BUFF_SIZE - 2) { // -2: '-\0' 0x is in both side.
           lexError(compiler, "Hex literal is too long.");
           break;
         }
 
         // "Append" the next digit at the end.
-        uint8_t append_val = ('0' <= c && c <= '9')
+        append_val = ('0' <= c && c <= '9')
           ? (uint8_t)(c - '0')
           : (uint8_t)((c - 'a') + 10);
         hex = (hex << 4) | append_val;
 
       } while (true);
-
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+      value = VAR_NUM((double)(__int64)hex);
+#else
       value = VAR_NUM((double)hex);
+#endif
     }
 
   } else { // Regular number literal.
@@ -742,8 +773,9 @@ static void lexToken(Compiler* compiler) {
   if (compiler->current.type == TK_EOF) return;
 
   while (peekChar(compiler) != '\0') {
-    compiler->token_start = compiler->current_char;
-    char c = eatChar(compiler);
+    char c;
+	compiler->token_start = compiler->current_char;
+    c = eatChar(compiler);
 
     switch (c) {
       case ',': setNextToken(compiler, TK_COMMA); return;
@@ -1035,11 +1067,12 @@ typedef struct {
 // Will check if the name already defined.
 static NameSearchResult compilerSearchName(Compiler* compiler,
   const char* name, uint32_t length) {
-
+  int i;
+  int index; // For storing the search result below.
   NameSearchResult result;
   result.type = NAME_NOT_DEFINED;
 
-  for (int i = compiler->local_count - 1; i >= 0; i--) {
+  for (i = compiler->local_count - 1; i >= 0; i--) {
     Local* local = &compiler->locals[i];
     ASSERT(local->depth != DEPTH_GLOBAL, OOPS);
 
@@ -1058,7 +1091,7 @@ static NameSearchResult compilerSearchName(Compiler* compiler,
     }
   }
 
-  int index; // For storing the search result below.
+  //int index; // For storing the search result below.
 
   // Search through globals.
   index = scriptGetGlobals(compiler->script, name, length);
@@ -1286,9 +1319,10 @@ static void exprName(Compiler* compiler) {
 
   if (result.type == NAME_NOT_DEFINED) {
     if (compiler->l_value && match(compiler, TK_EQ)) {
+      int index;
       skipNewLines(compiler);
 
-      int index = compilerAddVariable(compiler, start, length, line);
+      index = compilerAddVariable(compiler, start, length, line);
 
       // Compile the assigned value.
       compileExpression(compiler);
@@ -1307,8 +1341,9 @@ static void exprName(Compiler* compiler) {
 
       // The name could be a function which hasn't been defined at this point.
       if (peek(compiler) == TK_LPARAN) {
-        emitOpcode(compiler, OP_PUSH_FN);
-        int index = emitByte(compiler, 0xff);
+        int index;
+		emitOpcode(compiler, OP_PUSH_FN);
+        index = emitByte(compiler, 0xff);
         compilerAddForward(compiler, index, _FN, start, length, line);
       } else {
         parseError(compiler, "Name '%.*s' is not defined.", length, start);
@@ -1323,9 +1358,10 @@ static void exprName(Compiler* compiler) {
         const bool is_global = result.type == NAME_GLOBAL_VAR;
 
         if (compiler->l_value && matchAssignment(compiler)) {
-          skipNewLines(compiler);
+          TokenType assignment;
+		  skipNewLines(compiler);
 
-          TokenType assignment = compiler->previous.type;
+          assignment = compiler->previous.type;
           if (assignment != TK_EQ) {
             emitPushVariable(compiler, result.index, is_global);
             compileExpression(compiler);
@@ -1379,16 +1415,19 @@ static void exprName(Compiler* compiler) {
 */
 
 void exprOr(Compiler* compiler) {
+  int true_offset_a;
+  int true_offset_b;
+  int end_offset;
   emitOpcode(compiler, OP_JUMP_IF);
-  int true_offset_a = emitShort(compiler, 0xffff); //< Will be patched.
+  true_offset_a = emitShort(compiler, 0xffff); //< Will be patched.
 
   parsePrecedence(compiler, PREC_LOGICAL_OR);
   emitOpcode(compiler, OP_JUMP_IF);
-  int true_offset_b = emitShort(compiler, 0xffff); //< Will be patched.
+  true_offset_b = emitShort(compiler, 0xffff); //< Will be patched.
 
   emitOpcode(compiler, OP_PUSH_FALSE);
   emitOpcode(compiler, OP_JUMP);
-  int end_offset = emitShort(compiler, 0xffff); //< Will be patched.
+  end_offset = emitShort(compiler, 0xffff); //< Will be patched.
 
   patchJump(compiler, true_offset_a);
   patchJump(compiler, true_offset_b);
@@ -1400,16 +1439,19 @@ void exprOr(Compiler* compiler) {
 }
 
 void exprAnd(Compiler* compiler) {
+  int false_offset_a;
+  int false_offset_b;
+  int end_offset;
   emitOpcode(compiler, OP_JUMP_IF_NOT);
-  int false_offset_a = emitShort(compiler, 0xffff); //< Will be patched.
+  false_offset_a = emitShort(compiler, 0xffff); //< Will be patched.
 
   parsePrecedence(compiler, PREC_LOGICAL_AND);
   emitOpcode(compiler, OP_JUMP_IF_NOT);
-  int false_offset_b = emitShort(compiler, 0xffff); //< Will be patched.
+  false_offset_b = emitShort(compiler, 0xffff); //< Will be patched.
 
   emitOpcode(compiler, OP_PUSH_TRUE);
   emitOpcode(compiler, OP_JUMP);
-  int end_offset = emitShort(compiler, 0xffff); //< Will be patched.
+  end_offset = emitShort(compiler, 0xffff); //< Will be patched.
 
   patchJump(compiler, false_offset_a);
   patchJump(compiler, false_offset_b);
@@ -1421,11 +1463,12 @@ void exprAnd(Compiler* compiler) {
 }
 
 static void exprChainCall(Compiler* compiler) {
+  int argc;
   skipNewLines(compiler);
   parsePrecedence(compiler, (Precedence)(PREC_CHAIN_CALL + 1));
   emitOpcode(compiler, OP_SWAP); // Swap the data with the function.
 
-  int argc = 1; // The initial data.
+  argc = 1; // The initial data.
 
   if (match(compiler, TK_LBRACE)) {
     if (!match(compiler, TK_RBRACE)) {
@@ -1505,11 +1548,13 @@ static void exprGrouping(Compiler* compiler) {
 }
 
 static void exprList(Compiler* compiler) {
+  int size_index;
+  int size;
 
   emitOpcode(compiler, OP_PUSH_LIST);
-  int size_index = emitShort(compiler, 0);
+  size_index = emitShort(compiler, 0);
 
-  int size = 0;
+  size = 0;
   do {
     skipNewLines(compiler);
     if (peek(compiler) == TK_RBRACKET) break;
@@ -1573,17 +1618,21 @@ static void exprCall(Compiler* compiler) {
 }
 
 static void exprAttrib(Compiler* compiler) {
+  const char* name;
+  int length;
+  int index;
   consume(compiler, TK_NAME, "Expected an attribute name after '.'.");
-  const char* name = compiler->previous.start;
-  int length = compiler->previous.length;
+  name = compiler->previous.start;
+  length = compiler->previous.length;
 
   // Store the name in script's names.
-  int index = scriptAddName(compiler->script, compiler->vm, name, length);
+  index = scriptAddName(compiler->script, compiler->vm, name, length);
 
   if (compiler->l_value && matchAssignment(compiler)) {
-    skipNewLines(compiler);
+    TokenType assignment;
+	skipNewLines(compiler);
 
-    TokenType assignment = compiler->previous.type;
+    assignment = compiler->previous.type;
     if (assignment != TK_EQ) {
       emitOpcode(compiler, OP_GET_ATTRIB_KEEP);
       emitShort(compiler, index);
@@ -1609,9 +1658,10 @@ static void exprSubscript(Compiler* compiler) {
   consume(compiler, TK_RBRACKET, "Expected ']' after subscription ends.");
 
   if (compiler->l_value && matchAssignment(compiler)) {
-    skipNewLines(compiler);
+    TokenType assignment;
+	skipNewLines(compiler);
 
-    TokenType assignment = compiler->previous.type;
+    assignment = compiler->previous.type;
     if (assignment != TK_EQ) {
       emitOpcode(compiler, OP_GET_SUBSCRIPT_KEEP);
       compileExpression(compiler);
@@ -1643,8 +1693,9 @@ static void exprValue(Compiler* compiler) {
 }
 
 static void parsePrecedence(Compiler* compiler, Precedence precedence) {
+  GrammarFn prefix;
   lexToken(compiler);
-  GrammarFn prefix = getRule(compiler->previous.type)->prefix;
+  prefix = getRule(compiler->previous.type)->prefix;
 
   if (prefix == NULL) {
     parseError(compiler, "Expected an expression.");
@@ -1659,8 +1710,9 @@ static void parsePrecedence(Compiler* compiler, Precedence precedence) {
   prefix(compiler);
 
   while (getRule(compiler->current.type)->precedence >= precedence) {
-    lexToken(compiler);
-    GrammarFn infix = getRule(compiler->previous.type)->infix;
+    GrammarFn infix;
+	lexToken(compiler);
+    infix = getRule(compiler->previous.type)->infix;
     infix(compiler);
   }
 }
@@ -1748,13 +1800,14 @@ static int compilerAddVariable(Compiler* compiler, const char* name,
 
 static void compilerAddForward(Compiler* compiler, int instruction, Fn* fn,
                                const char* name, int length, int line) {
+  ForwardName* forward;
   if (compiler->forwards_count == MAX_FORWARD_NAMES) {
     parseError(compiler, "A script should contain at most %d implicit forward "
                "function declarations.", MAX_FORWARD_NAMES);
     return;
   }
 
-  ForwardName* forward = &compiler->forwards[compiler->forwards_count++];
+  forward = &compiler->forwards[compiler->forwards_count++];
   forward->instruction = instruction;
   forward->func = fn;
   forward->name = name;
@@ -1764,9 +1817,10 @@ static void compilerAddForward(Compiler* compiler, int instruction, Fn* fn,
 
 // Add a literal constant to scripts literals and return it's index.
 static int compilerAddConstant(Compiler* compiler, Var value) {
+  uint32_t i;
   pkVarBuffer* literals = &compiler->script->literals;
 
-  for (uint32_t i = 0; i < literals->count; i++) {
+  for (i = 0; i < literals->count; i++) {
     if (isValuesSame(literals->data[i], value)) {
       return i;
     }
@@ -1808,9 +1862,10 @@ static void compilerChangeStack(Compiler* compiler, int num) {
 // those locals till the scope ends. This will returns the number of locals
 // that were popped.
 static int compilerPopLocals(Compiler* compiler, int depth) {
+  int local;
   ASSERT(depth > (int)DEPTH_GLOBAL, "Cannot pop global variables.");
 
-  int local = compiler->local_count - 1;
+  local = compiler->local_count - 1;
   while (local >= 0 && compiler->locals[local].depth >= depth) {
 
     // Note: Do not use emitOpcode(compiler, OP_POP);
@@ -1827,10 +1882,11 @@ static int compilerPopLocals(Compiler* compiler, int depth) {
 
 // Exits a block.
 static void compilerExitBlock(Compiler* compiler) {
+  int popped;
   ASSERT(compiler->scope_depth > (int)DEPTH_GLOBAL, "Cannot exit toplevel.");
 
   // Discard all the locals at the current scope.
-  int popped = compilerPopLocals(compiler, compiler->scope_depth);
+  popped = compilerPopLocals(compiler, compiler->scope_depth);
   compiler->local_count -= popped;
   compiler->stack_size -= popped;
   compiler->scope_depth--;
@@ -1878,8 +1934,9 @@ static void emitOpcode(Compiler* compiler, Opcode opcode) {
 
 // Jump back to the start of the loop.
 static void emitLoopJump(Compiler* compiler) {
+  int offset;
   emitOpcode(compiler, OP_LOOP);
-  int offset = (int)_FN->opcodes.count - compiler->loop->start + 2;
+  offset = (int)_FN->opcodes.count - compiler->loop->start + 2;
   emitShort(compiler, offset);
 }
 
@@ -1942,29 +1999,37 @@ static void compileBlockBody(Compiler* compiler, BlockType type);
 
 // Compile a type and return it's index in the script's types buffer.
 static int compileType(Compiler* compiler) {
+  const char* name;
+  int name_len;
+  NameSearchResult result;
+  Class* type;
+  int fn_index;
+  int ty_index;
+  Func curr_fn;
+  TokenType next;
 
   // Consume the name of the type.
   consume(compiler, TK_NAME, "Expected a type name.");
-  const char* name = compiler->previous.start;
-  int name_len = compiler->previous.length;
-  NameSearchResult result = compilerSearchName(compiler, name, name_len);
+  name = compiler->previous.start;
+  name_len = compiler->previous.length;
+  result = compilerSearchName(compiler, name, name_len);
   if (result.type != NAME_NOT_DEFINED) {
     parseError(compiler, "Name '%.*s' already exists.", name_len, name);
   }
 
   // Create a new type.
-  Class* type = newClass(compiler->vm, compiler->script,
+  type = newClass(compiler->vm, compiler->script,
                          name, (uint32_t)name_len);
   type->ctor->arity = 0;
 
   // Check count exceeded.
-  int fn_index = (int)compiler->script->functions.count - 1;
+  fn_index = (int)compiler->script->functions.count - 1;
   if (fn_index == MAX_FUNCTIONS) {
     parseError(compiler, "A script should contain at most %d functions.",
                MAX_FUNCTIONS);
   }
 
-  int ty_index = (int)(compiler->script->classes.count - 1);
+  ty_index = (int)(compiler->script->classes.count - 1);
   if (ty_index == MAX_CLASSES) {
     parseError(compiler, "A script should contain at most %d types.",
                MAX_CLASSES);
@@ -1972,7 +2037,7 @@ static int compileType(Compiler* compiler) {
 
   // Compile the constructor function.
   ASSERT(compiler->func->ptr == compiler->script->body, OOPS);
-  Func curr_fn;
+  
   compilerPushFunc(compiler, &curr_fn, type->ctor, fn_index);
   compilerEnterBlock(compiler);
 
@@ -1981,20 +2046,25 @@ static int compileType(Compiler* compiler) {
   emitByte(compiler, ty_index);
 
   skipNewLines(compiler);
-  TokenType next = peek(compiler);
+  next = peek(compiler);
   while (next != TK_END && next != TK_EOF) {
+    const char* f_name;
+	int f_len;
+	uint32_t f_index;
+	String* new_name;
+	uint32_t i;
 
     // Compile field name.
     consume(compiler, TK_NAME, "Expected a type name.");
-    const char* f_name = compiler->previous.start;
-    int f_len = compiler->previous.length;
+    f_name = compiler->previous.start;
+    f_len = compiler->previous.length;
 
-    uint32_t f_index = scriptAddName(compiler->script, compiler->vm,
+    f_index = scriptAddName(compiler->script, compiler->vm,
                                      f_name, f_len);
 
     // TODO: Add a string compare macro.
-    String* new_name = compiler->script->names.data[f_index];
-    for (uint32_t i = 0; i < type->field_names.count; i++) {
+    new_name = compiler->script->names.data[f_index];
+    for (i = 0; i < type->field_names.count; i++) {
       String* prev = compiler->script->names.data[type->field_names.data[i]];
       if (new_name->hash == prev->hash && new_name->length == prev->length &&
           memcmp(new_name->data, prev->data, prev->length) == 0) {
@@ -2030,15 +2100,19 @@ static int compileType(Compiler* compiler) {
 
 // Compile a function and return it's index in the script's function buffer.
 static int compileFunction(Compiler* compiler, FuncType fn_type) {
-
+  Function* func;
+  int fn_index;
   const char* name;
   int name_length;
+  Func curr_fn;
+  int argc;
 
   if (fn_type != FN_LITERAL) {
-    consume(compiler, TK_NAME, "Expected a function name.");
+    NameSearchResult result;
+	consume(compiler, TK_NAME, "Expected a function name.");
     name = compiler->previous.start;
     name_length = compiler->previous.length;
-    NameSearchResult result = compilerSearchName(compiler, name, name_length);
+    result = compilerSearchName(compiler, name, name_length);
     if (result.type != NAME_NOT_DEFINED) {
       parseError(compiler, "Name '%.*s' already exists.", name_length, name);
     }
@@ -2048,34 +2122,38 @@ static int compileFunction(Compiler* compiler, FuncType fn_type) {
     name_length = (int)strlen(name);
   }
 
-  Function* func = newFunction(compiler->vm, name, name_length,
+  func = newFunction(compiler->vm, name, name_length,
                                compiler->script, fn_type == FN_NATIVE, NULL);
-  int fn_index = (int)compiler->script->functions.count - 1;
+  fn_index = (int)compiler->script->functions.count - 1;
   if (fn_index == MAX_FUNCTIONS) {
     parseError(compiler, "A script should contain at most %d functions.",
                MAX_FUNCTIONS);
   }
 
-  Func curr_fn;
+  
   compilerPushFunc(compiler, &curr_fn, func, fn_index);
 
-  int argc = 0;
+  argc = 0;
   compilerEnterBlock(compiler); // Parameter depth.
 
   // Parameter list is optional.
   if (match(compiler, TK_LPARAN) && !match(compiler, TK_RPARAN)) {
     do {
+      const char* param_name;
+      int i;
+      uint32_t param_len;
+	  bool predefined;
       skipNewLines(compiler);
 
       consume(compiler, TK_NAME, "Expected a parameter name.");
       argc++;
 
-      const char* param_name = compiler->previous.start;
-      uint32_t param_len = compiler->previous.length;
+      param_name = compiler->previous.start;
+      param_len = compiler->previous.length;
 
       // TODO: move this to a functions.
-      bool predefined = false;
-      for (int i = compiler->local_count - 1; i >= 0; i--) {
+      predefined = false;
+      for (i = compiler->local_count - 1; i >= 0; i--) {
         Local* local = &compiler->locals[i];
         if (compiler->scope_depth != local->depth) break;
         if (local->length == param_len &&
@@ -2135,6 +2213,7 @@ static int compileFunction(Compiler* compiler, FuncType fn_type) {
 
 // Finish a block body.
 static void compileBlockBody(Compiler* compiler, BlockType type) {
+  TokenType next;
 
   compilerEnterBlock(compiler);
 
@@ -2155,7 +2234,7 @@ static void compileBlockBody(Compiler* compiler, BlockType type) {
     skipNewLines(compiler);
   }
 
-  TokenType next = peek(compiler);
+  next = peek(compiler);
   while (!(next == TK_END || next == TK_EOF || (
     (type == BLOCK_IF) && (next == TK_ELSE || next == TK_ELSIF)))) {
 
@@ -2172,12 +2251,22 @@ static void compileBlockBody(Compiler* compiler, BlockType type) {
 // path) and return it as a script pointer. And it'll emit opcodes to push
 // that script to the stack.
 static Script* importFile(Compiler* compiler, const char* path) {
+  PKVM* vm;
+  Var entry;
+  String* path_name;
+  int index;
+  PkStringPtr source;
+  Script* scr;
+  PkCompileOptions options;
+  PkResult result;
+  PkStringPtr resolved = { path, NULL, NULL };
+
   ASSERT(compiler->scope_depth == DEPTH_GLOBAL, OOPS);
 
-  PKVM* vm = compiler->vm;
+  vm = compiler->vm;
 
   // Resolve the path.
-  PkStringPtr resolved = { path, NULL, NULL };
+  
   if (vm->config.resolve_path_fn != NULL) {
     resolved = vm->config.resolve_path_fn(vm, compiler->script->path->data,
                                           path);
@@ -2189,13 +2278,13 @@ static Script* importFile(Compiler* compiler, const char* path) {
   }
 
   // Create new string for the resolved path. And free the resolved path.
-  int index = (int)scriptAddName(compiler->script, compiler->vm,
+  index = (int)scriptAddName(compiler->script, compiler->vm,
                            resolved.string, (uint32_t)strlen(resolved.string));
-  String* path_name = compiler->script->names.data[index];
-  if (resolved.on_done != NULL) resolved.on_done(vm, resolved);
+  path_name = compiler->script->names.data[index];
+  if (resolved.on_done != NULL) resolved.on_done(vm, &resolved);
 
   // Check if the script already exists.
-  Var entry = mapGet(vm->scripts, VAR_OBJ(path_name));
+  entry = mapGet(vm->scripts, VAR_OBJ(path_name));
   if (!IS_UNDEF(entry)) {
     ASSERT(AS_OBJ(entry)->type == OBJ_SCRIPT, OOPS);
 
@@ -2213,14 +2302,14 @@ static Script* importFile(Compiler* compiler, const char* path) {
   }
 
   // Load the script at the path.
-  PkStringPtr source = vm->config.load_script_fn(vm, path_name->data);
+  source = vm->config.load_script_fn(vm, path_name->data);
   if (source.string == NULL) {
     parseError(compiler, "Error loading script at \"%s\"", path_name->data);
     return NULL;
   }
 
   // Make a new script and to compile it.
-  Script* scr = newScript(vm, path_name);
+  scr = newScript(vm, path_name);
   vmPushTempRef(vm, &scr->_super); // scr.
   mapSet(vm, vm->scripts, VAR_OBJ(path_name), VAR_OBJ(scr));
   vmPopTempRef(vm); // scr.
@@ -2231,13 +2320,13 @@ static Script* importFile(Compiler* compiler, const char* path) {
 
   // Option for the compilation, even if we're running on repl mode the
   // imported script cannot run on repl mode.
-  PkCompileOptions options = pkNewCompilerOptions();
+  options = pkNewCompilerOptions();
   if (compiler->options) options = *compiler->options;
   options.repl_mode = false;
 
   // Compile the source to the script and clean the source.
-  PkResult result = compile(vm, scr, source.string, &options);
-  if (source.on_done != NULL) source.on_done(vm, source);
+  result = compile(vm, scr, source.string, &options);
+  if (source.on_done != NULL) source.on_done(vm, &source);
 
   if (result != PK_RESULT_SUCCESS) {
     parseError(compiler, "Compilation of imported script '%s' failed",
@@ -2251,15 +2340,19 @@ static Script* importFile(Compiler* compiler, const char* path) {
 // push that script to the stack.
 static Script* importCoreLib(Compiler* compiler, const char* name_start,
                              int name_length) {
+  int index;
+  String* module;
+  Var entry;
+
   ASSERT(compiler->scope_depth == DEPTH_GLOBAL, OOPS);
 
   // Add the name to the script's name buffer, we need it as a key to the
   // vm's script cache.
-  int index = (int)scriptAddName(compiler->script, compiler->vm,
+  index = (int)scriptAddName(compiler->script, compiler->vm,
                                  name_start, name_length);
-  String* module = compiler->script->names.data[index];
+  module = compiler->script->names.data[index];
 
-  Var entry = mapGet(compiler->vm->core_libs, VAR_OBJ(module));
+  entry = mapGet(compiler->vm->core_libs, VAR_OBJ(module));
   if (IS_UNDEF(entry)) {
     parseError(compiler, "No module named '%s' exists.", module->data);
     return NULL;
@@ -2285,9 +2378,10 @@ static inline Script* compilerImport(Compiler* compiler) {
                          compiler->previous.length);
 
   } else if (match(compiler, TK_STRING)) { //< Local library.
-    Var var_path = compiler->previous.value;
+    String* path;
+	Var var_path = compiler->previous.value;
     ASSERT(IS_OBJ_TYPE(var_path, OBJ_STRING), OOPS);
-    String* path = (String*)AS_OBJ(var_path);
+    path = (String*)AS_OBJ(var_path);
     return importFile(compiler, path->data);
   }
 
@@ -2302,9 +2396,10 @@ static inline Script* compilerImport(Compiler* compiler) {
 // and return -1.
 static int compilerImportName(Compiler* compiler, int line,
                               const char* name, uint32_t length) {
+  NameSearchResult result;
   ASSERT(compiler->scope_depth == DEPTH_GLOBAL, OOPS);
 
-  NameSearchResult result = compilerSearchName(compiler, name, length);
+  result = compilerSearchName(compiler, name, length);
   switch (result.type) {
     case NAME_NOT_DEFINED:
       return compilerAddVariable(compiler, name, length, line);
@@ -2329,23 +2424,26 @@ static int compilerImportName(Compiler* compiler, int line,
 // entry from the imported script. (could be a function or global variable).
 static void compilerImportSingleEntry(Compiler* compiler,
                                       const char* name, uint32_t length) {
+  int line;
+  int name_index;
+  int index;
 
   // Special names are begins with '$' like function body (only for now).
   // Skip them.
   if (name[0] == '$') return;
 
   // Line number of the variables which will be bind to the imported symbol.
-  int line = compiler->previous.line;
+  line = compiler->previous.line;
 
   // Add the name to the **current** script's name buffer.
-  int name_index = (int)scriptAddName(compiler->script, compiler->vm,
+  name_index = (int)scriptAddName(compiler->script, compiler->vm,
                                       name, length);
 
   // Get the function from the script.
   emitOpcode(compiler, OP_GET_ATTRIB_KEEP);
   emitShort(compiler, name_index);
 
-  int index = compilerImportName(compiler, line, name, length);
+  index = compilerImportName(compiler, line, name, length);
   if (index != -1) emitStoreVariable(compiler, index, true);
   emitOpcode(compiler, OP_POP);
 }
@@ -2353,29 +2451,31 @@ static void compilerImportSingleEntry(Compiler* compiler,
 // Import all from the script, which is also would be at the top of the stack
 // before executing the below instructions.
 static void compilerImportAll(Compiler* compiler, Script* script) {
+  uint32_t i;
 
   ASSERT(script != NULL, OOPS);
   ASSERT(compiler->scope_depth == DEPTH_GLOBAL, OOPS);
 
   // Import all types.
-  for (uint32_t i = 0; i < script->classes.count; i++) {
+  for (i = 0; i < script->classes.count; i++) {
     uint32_t name_ind = script->classes.data[i]->name;
     String* name = script->names.data[name_ind];
     compilerImportSingleEntry(compiler, name->data, name->length);
   }
 
   // Import all functions.
-  for (uint32_t i = 0; i < script->functions.count; i++) {
+  for (i = 0; i < script->functions.count; i++) {
     const char* name = script->functions.data[i]->name;
     uint32_t length = (uint32_t)strlen(name);
     compilerImportSingleEntry(compiler, name, length);
   }
 
   // Import all globals.
-  for (uint32_t i = 0; i < script->globals.count; i++) {
-    ASSERT(i < script->global_names.count, OOPS);
+  for (i = 0; i < script->globals.count; i++) {
+    const String* name;
+	ASSERT(i < script->global_names.count, OOPS);
     ASSERT(script->global_names.data[i] < script->names.count, OOPS);
-    const String* name = script->names.data[script->global_names.data[i]];
+    name = script->names.data[script->global_names.data[i]];
 
     compilerImportSingleEntry(compiler, name->data, name->length);
   }
@@ -2383,11 +2483,13 @@ static void compilerImportAll(Compiler* compiler, Script* script) {
 
 // from module import symbol [as alias [, symbol2 [as alias]]]
 static void compileFromImport(Compiler* compiler) {
+  Script* lib_from;
+
   ASSERT(compiler->scope_depth == DEPTH_GLOBAL, OOPS);
 
   // Import the library and push it on the stack. If the import failed
   // lib_from would be NULL.
-  Script* lib_from = compilerImport(compiler);
+  lib_from = compilerImport(compiler);
 
   // At this point the script would be on the stack before executing the next
   // instruction.
@@ -2399,14 +2501,20 @@ static void compileFromImport(Compiler* compiler) {
 
   } else {
     do {
-      // Consume the symbol name to import from the script.
+      const char* name;
+	  uint32_t length;
+	  int line;
+	  int name_index;
+	  int var_index;
+
+	  // Consume the symbol name to import from the script.
       consume(compiler, TK_NAME, "Expected symbol to import.");
-      const char* name = compiler->previous.start;
-      uint32_t length = (uint32_t)compiler->previous.length;
-      int line = compiler->previous.line;
+      name = compiler->previous.start;
+      length = (uint32_t)compiler->previous.length;
+      line = compiler->previous.line;
 
       // Add the name of the symbol to the names buffer.
-      int name_index = (int)scriptAddName(compiler->script, compiler->vm,
+      name_index = (int)scriptAddName(compiler->script, compiler->vm,
                                           name, length);
 
       // Don't pop the lib since it'll be used for the next entry.
@@ -2428,7 +2536,7 @@ static void compileFromImport(Compiler* compiler) {
 
       // Get the variable to bind the imported symbol, if we already have a
       // variable with that name override it, otherwise use a new variable.
-      int var_index = compilerImportName(compiler, line, name, length);
+      var_index = compilerImportName(compiler, line, name, length);
       if (var_index != -1) emitStoreVariable(compiler, var_index, true);
       emitOpcode(compiler, OP_POP);
 
@@ -2457,14 +2565,18 @@ static void compileRegularImport(Compiler* compiler) {
 
     // Check if it has an alias, if so bind the variable with that name.
     if (match(compiler, TK_AS)) {
-      // Consuming it'll update the previous token which would be the name of
+      const char* name;
+	  int length, line;
+	  
+	  // Consuming it'll update the previous token which would be the name of
       // the binding variable.
       consume(compiler, TK_NAME, "Expected a name after 'as'.");
 
       // Get the variable to bind the imported symbol, if we already have a
       // variable with that name override it, otherwise use a new variable.
-      const char* name = compiler->previous.start;
-      int length = compiler->previous.length, line = compiler->previous.line;
+      name = compiler->previous.start;
+      length = compiler->previous.length; 
+	  line = compiler->previous.line;
       var_index = compilerImportName(compiler, line, name, length);
 
     } else {
@@ -2509,19 +2621,21 @@ static void compileExpression(Compiler* compiler) {
 }
 
 static void compileIfStatement(Compiler* compiler, bool elsif) {
+  int ifpatch;
 
   skipNewLines(compiler);
   compileExpression(compiler); //< Condition.
   emitOpcode(compiler, OP_JUMP_IF_NOT);
-  int ifpatch = emitShort(compiler, 0xffff); //< Will be patched.
+  ifpatch = emitShort(compiler, 0xffff); //< Will be patched.
 
   compileBlockBody(compiler, BLOCK_IF);
 
   if (match(compiler, TK_ELSIF)) {
+    int exit_jump;
 
     // Jump pass else.
     emitOpcode(compiler, OP_JUMP);
-    int exit_jump = emitShort(compiler, 0xffff); //< Will be patched.
+    exit_jump = emitShort(compiler, 0xffff); //< Will be patched.
 
     // if (false) jump here.
     patchJump(compiler, ifpatch);
@@ -2533,10 +2647,11 @@ static void compileIfStatement(Compiler* compiler, bool elsif) {
     patchJump(compiler, exit_jump);
 
   } else if (match(compiler, TK_ELSE)) {
+    int exit_jump;
 
     // Jump pass else.
     emitOpcode(compiler, OP_JUMP);
-    int exit_jump = emitShort(compiler, 0xffff); //< Will be patched.
+    exit_jump = emitShort(compiler, 0xffff); //< Will be patched.
 
     patchJump(compiler, ifpatch);
     compileBlockBody(compiler, BLOCK_ELSE);
@@ -2555,6 +2670,8 @@ static void compileIfStatement(Compiler* compiler, bool elsif) {
 }
 
 static void compileWhileStatement(Compiler* compiler) {
+  int i;
+  int whilepatch;
   Loop loop;
   loop.start = (int)_FN->opcodes.count;
   loop.patch_count = 0;
@@ -2564,7 +2681,7 @@ static void compileWhileStatement(Compiler* compiler) {
 
   compileExpression(compiler); //< Condition.
   emitOpcode(compiler, OP_JUMP_IF_NOT);
-  int whilepatch = emitShort(compiler, 0xffff); //< Will be patched.
+  whilepatch = emitShort(compiler, 0xffff); //< Will be patched.
 
   compileBlockBody(compiler, BLOCK_LOOP);
 
@@ -2572,7 +2689,7 @@ static void compileWhileStatement(Compiler* compiler) {
   patchJump(compiler, whilepatch);
 
   // Patch break statement.
-  for (int i = 0; i < compiler->loop->patch_count; i++) {
+  for (i = 0; i < compiler->loop->patch_count; i++) {
     patchJump(compiler, compiler->loop->patches[i]);
   }
   compiler->loop = loop.outer_loop;
@@ -2582,13 +2699,20 @@ static void compileWhileStatement(Compiler* compiler) {
 }
 
 static void compileForStatement(Compiler* compiler) {
+  const char* iter_name;
+  int iter_len;
+  int iter_line;
+  Loop loop;
+  int forpatch;
+  int i;
+
   compilerEnterBlock(compiler);
   consume(compiler, TK_NAME, "Expected an iterator name.");
 
   // Unlike functions local variable could shadow a name.
-  const char* iter_name = compiler->previous.start;
-  int iter_len = compiler->previous.length;
-  int iter_line = compiler->previous.line;
+  iter_name = compiler->previous.start;
+  iter_len = compiler->previous.length;
+  iter_line = compiler->previous.line;
 
   consume(compiler, TK_IN, "Expected 'in' after iterator name.");
 
@@ -2609,7 +2733,7 @@ static void compileForStatement(Compiler* compiler) {
   // Start the iteration, and check if the sequence is iterable.
   emitOpcode(compiler, OP_ITER_TEST);
 
-  Loop loop;
+  
   loop.start = (int)_FN->opcodes.count;
   loop.patch_count = 0;
   loop.outer_loop = compiler->loop;
@@ -2618,7 +2742,7 @@ static void compileForStatement(Compiler* compiler) {
 
   // Compile next iteration.
   emitOpcode(compiler, OP_ITER);
-  int forpatch = emitShort(compiler, 0xffff);
+  forpatch = emitShort(compiler, 0xffff);
 
   compileBlockBody(compiler, BLOCK_LOOP);
 
@@ -2626,7 +2750,7 @@ static void compileForStatement(Compiler* compiler) {
   patchJump(compiler, forpatch); //< Patch exit iteration address.
 
   // Patch break statement.
-  for (int i = 0; i < compiler->loop->patch_count; i++) {
+  for (i = 0; i < compiler->loop->patch_count; i++) {
     patchJump(compiler, compiler->loop->patches[i]);
   }
   compiler->loop = loop.outer_loop;
@@ -2652,6 +2776,8 @@ static void compileStatement(Compiler* compiler) {
   compiler->is_last_call = false;
 
   if (match(compiler, TK_BREAK)) {
+	int patch;
+
     if (compiler->loop == NULL) {
       parseError(compiler, "Cannot use 'break' outside a loop.");
       return;
@@ -2665,7 +2791,7 @@ static void compileStatement(Compiler* compiler) {
     compilerPopLocals(compiler, compiler->loop->depth + 1);
 
     emitOpcode(compiler, OP_JUMP);
-    int patch = emitShort(compiler, 0xffff); //< Will be patched.
+    patch = emitShort(compiler, 0xffff); //< Will be patched.
     compiler->loop->patches[compiler->loop->patch_count++] = patch;
 
   } else if (match(compiler, TK_CONTINUE)) {
@@ -2772,12 +2898,19 @@ static void compileTopLevelStatement(Compiler* compiler) {
 
 PkResult compile(PKVM* vm, Script* script, const char* source,
              const PkCompileOptions* options) {
+  Compiler _compiler;
+  Compiler* compiler;
+  uint32_t globals_count;
+  uint32_t functions_count;
+  uint32_t types_count;
+  Func curr_fn;
+  int i;
 
   // Skip utf8 BOM if there is any.
   if (strncmp(source, "\xEF\xBB\xBF", 3) == 0) source += 3;
 
-  Compiler _compiler;
-  Compiler* compiler = &_compiler; //< Compiler pointer for quick access.
+  
+  compiler = &_compiler; //< Compiler pointer for quick access.
   compilerInit(compiler, vm, source, script, options);
 
   // If compiling for an imported script the vm->compiler would be the compiler
@@ -2794,11 +2927,11 @@ PkResult compile(PKVM* vm, Script* script, const char* source,
 
   // Remember the count of the globals, functions and types, If the compilation
   // failed discard all the globals and functions added by the compilation.
-  uint32_t globals_count = script->globals.count;
-  uint32_t functions_count = script->functions.count;
-  uint32_t types_count = script->classes.count;
+  globals_count = script->globals.count;
+  functions_count = script->functions.count;
+  types_count = script->classes.count;
 
-  Func curr_fn;
+  
   curr_fn.depth = DEPTH_SCRIPT;
   curr_fn.ptr = script->body;
   curr_fn.outer_func = NULL;
@@ -2818,9 +2951,11 @@ PkResult compile(PKVM* vm, Script* script, const char* source,
       parseError(compiler, "Module name already defined.");
 
     } else {
-      consume(compiler, TK_NAME, "Expected a name for the module.");
-      const char* name = compiler->previous.start;
-      uint32_t len = compiler->previous.length;
+      const char* name;
+	  uint32_t len;
+	  consume(compiler, TK_NAME, "Expected a name for the module.");
+      name = compiler->previous.start;
+      len = compiler->previous.length;
       script->module = newStringLength(vm, name, len);
       consumeEndStatement(compiler);
     }
@@ -2834,7 +2969,7 @@ PkResult compile(PKVM* vm, Script* script, const char* source,
   emitFunctionEnd(compiler);
 
   // Resolve forward names (function names that are used before defined).
-  for (int i = 0; i < compiler->forwards_count; i++) {
+  for (i = 0; i < compiler->forwards_count; i++) {
     ForwardName* forward = &compiler->forwards[i];
     const char* name = forward->name;
     int length = forward->length;
@@ -2879,15 +3014,19 @@ PkResult compile(PKVM* vm, Script* script, const char* source,
   return PK_RESULT_SUCCESS;
 }
 
-PkResult pkCompileModule(PKVM* vm, PkHandle* module, PkStringPtr source,
+PkResult pkCompileModule(PKVM* vm, PkHandle* module, PkStringPtr* source,
                          const PkCompileOptions* options) {
-  __ASSERT(module != NULL, "Argument module was NULL.");
-  Var scr = module->value;
-  __ASSERT(IS_OBJ_TYPE(scr, OBJ_SCRIPT), "Given handle is not a module");
-  Script* script = (Script*)AS_OBJ(scr);
+  Var scr;
+  Script* script;
+  PkResult result;
 
-  PkResult result = compile(vm, script, source.string, options);
-  if (source.on_done) source.on_done(vm, source);
+  __ASSERT(module != NULL, "Argument module was NULL.");
+  scr = module->value;
+  __ASSERT(IS_OBJ_TYPE(scr, OBJ_SCRIPT), "Given handle is not a module");
+  script = (Script*)AS_OBJ(scr);
+
+  result = compile(vm, script, source->string, options);
+  if (source->on_done) source->on_done(vm, source);
   return result;
 }
 

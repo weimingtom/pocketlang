@@ -15,6 +15,10 @@
 #include "pk_var.h"
 #include "pk_vm.h"
 
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define inline __inline
+#endif
+
 // M_PI is non standard. The macro _USE_MATH_DEFINES defining before importing
 // <math.h> will define the constants for MSVC. But for a portable solution,
 // we're defining it ourselves if it isn't already.
@@ -61,9 +65,10 @@ PkHandle* pkNewModule(PKVM* vm, const char* name) {
 // pkModuleAddGlobal implementation (see pocketlang.h for description).
 PK_PUBLIC void pkModuleAddGlobal(PKVM* vm, PkHandle* module,
                                  const char* name, PkHandle* value) {
+  Var scr;
   __ASSERT(module != NULL, "Argument module was NULL.");
   __ASSERT(value != NULL, "Argument value was NULL.");
-  Var scr = module->value;
+  scr = module->value;
   __ASSERT(IS_OBJ_TYPE(scr, OBJ_SCRIPT), "Given handle is not a module");
 
   moduleAddGlobalInternal(vm, (Script*)AS_OBJ(scr), name, value->value);
@@ -72,8 +77,9 @@ PK_PUBLIC void pkModuleAddGlobal(PKVM* vm, PkHandle* module,
 // pkModuleAddFunction implementation (see pocketlang.h for description).
 void pkModuleAddFunction(PKVM* vm, PkHandle* module, const char* name,
                          pkNativeFn fptr, int arity) {
+  Var scr;
   __ASSERT(module != NULL, "Argument module was NULL.");
-  Var scr = module->value;
+  scr = module->value;
   __ASSERT(IS_OBJ_TYPE(scr, OBJ_SCRIPT), "Given handle is not a module");
   moduleAddFunctionInternal(vm, (Script*)AS_OBJ(scr), name, fptr, arity,
                             NULL /*TODO: Public API for function docstring.*/);
@@ -81,12 +87,15 @@ void pkModuleAddFunction(PKVM* vm, PkHandle* module, const char* name,
 
 PkHandle* pkGetFunction(PKVM* vm, PkHandle* module,
                                   const char* name) {
+  Var scr;
+  Script* script;
+  uint32_t i;
   __ASSERT(module != NULL, "Argument module was NULL.");
-  Var scr = module->value;
+  scr = module->value;
   __ASSERT(IS_OBJ_TYPE(scr, OBJ_SCRIPT), "Given handle is not a module");
-  Script* script = (Script*)AS_OBJ(scr);
+  script = (Script*)AS_OBJ(scr);
 
-  for (uint32_t i = 0; i < script->functions.count; i++) {
+  for (i = 0; i < script->functions.count; i++) {
     const char* fn_name = script->functions.data[i]->name;
     if (strcmp(name, fn_name) == 0) {
       return vmNewHandle(vm, VAR_OBJ(script->functions.data[i]));
@@ -150,18 +159,20 @@ PkVar pkGetArg(const PKVM* vm, int arg) {
 
 // pkGetArgBool implementation (see pocketlang.h for description).
 bool pkGetArgBool(PKVM* vm, int arg, bool* value) {
+  Var val;
   CHECK_GET_ARG_API_ERRORS();
 
-  Var val = ARG(arg);
+  val = ARG(arg);
   *value = toBool(val);
   return true;
 }
 
 // pkGetArgNumber implementation (see pocketlang.h for description).
 bool pkGetArgNumber(PKVM* vm, int arg, double* value) {
+  Var val;
   CHECK_GET_ARG_API_ERRORS();
 
-  Var val = ARG(arg);
+  val = ARG(arg);
   if (IS_NUM(val)) {
     *value = AS_NUM(val);
 
@@ -178,9 +189,10 @@ bool pkGetArgNumber(PKVM* vm, int arg, double* value) {
 
 // pkGetArgString implementation (see pocketlang.h for description).
 bool pkGetArgString(PKVM* vm, int arg, const char** value, uint32_t* length) {
+  Var val;
   CHECK_GET_ARG_API_ERRORS();
 
-  Var val = ARG(arg);
+  val = ARG(arg);
   if (IS_OBJ_TYPE(val, OBJ_STRING)) {
     String* str = (String*)AS_OBJ(val);
     *value = str->data;
@@ -196,10 +208,12 @@ bool pkGetArgString(PKVM* vm, int arg, const char** value, uint32_t* length) {
 
 // pkGetArgInstance implementation (see pocketlang.h for description).
 bool pkGetArgInst(PKVM* vm, int arg, uint32_t id, void** value) {
+  Var val;
+  bool is_native_instance;
   CHECK_GET_ARG_API_ERRORS();
 
-  Var val = ARG(arg);
-  bool is_native_instance = false;
+  val = ARG(arg);
+  is_native_instance = false;
 
   if (IS_OBJ_TYPE(val, OBJ_INST)) {
     Instance* inst = ((Instance*)AS_OBJ(val));
@@ -224,9 +238,10 @@ bool pkGetArgInst(PKVM* vm, int arg, uint32_t id, void** value) {
 
 // pkGetArgValue implementation (see pocketlang.h for description).
 bool pkGetArgValue(PKVM* vm, int arg, PkVarType type, PkVar* value) {
+  Var val;
   CHECK_GET_ARG_API_ERRORS();
 
-  Var val = ARG(arg);
+  val = ARG(arg);
   if (pkGetValueType((PkVar)&val) != type) {
     char buff[STR_INT_BUFF_SIZE]; sprintf(buff, "%d", arg);
     VM_SET_ERROR(vm, stringFormat(vm, "Expected a $ at argument $.",
@@ -285,18 +300,22 @@ const char* pkStringGetData(const PkVar value) {
 }
 
 PkVar pkFiberGetReturnValue(const PkHandle* fiber) {
+  Var fb;
+  Fiber* _fiber;
   __ASSERT(fiber != NULL, "Handle fiber was NULL.");
-  Var fb = fiber->value;
+  fb = fiber->value;
   __ASSERT(IS_OBJ_TYPE(fb, OBJ_FIBER), "Given handle is not a fiber");
-  Fiber* _fiber = (Fiber*)AS_OBJ(fb);
+  _fiber = (Fiber*)AS_OBJ(fb);
   return (PkVar)_fiber->ret;
 }
 
 bool pkFiberIsDone(const PkHandle* fiber) {
+  Var fb;
+  Fiber* _fiber;
   __ASSERT(fiber != NULL, "Handle fiber was NULL.");
-  Var fb = fiber->value;
+  fb = fiber->value;
   __ASSERT(IS_OBJ_TYPE(fb, OBJ_FIBER), "Given handle is not a fiber");
-  Fiber* _fiber = (Fiber*)AS_OBJ(fb);
+  _fiber = (Fiber*)AS_OBJ(fb);
   return _fiber->state == FIBER_DONE;
 }
 
@@ -385,7 +404,8 @@ static inline bool validateIndex(PKVM* vm, int64_t index, uint32_t size,
 
 // findBuiltinFunction implementation (see core.h for description).
 int findBuiltinFunction(const PKVM* vm, const char* name, uint32_t length) {
-   for (uint32_t i = 0; i < vm->builtins_count; i++) {
+   uint32_t i;
+   for (i = 0; i < vm->builtins_count; i++) {
      if (length == vm->builtins[i].length &&
        strncmp(name, vm->builtins[i].name, length) == 0) {
        return i;
@@ -489,21 +509,24 @@ DEF(coreAssert,
 DEF(coreBin,
   "bin(value:num) -> string\n"
   "Returns as a binary value string with '0x' prefix.") {
-
+  
+  char buff[STR_BIN_BUFF_SIZE];
   int64_t value;
+  bool negative;
+  char* ptr;
+  uint32_t length;
+
   if (!validateInteger(vm, ARG(1), &value, "Argument 1")) return;
 
-  char buff[STR_BIN_BUFF_SIZE];
-
-  bool negative = (value < 0) ? true : false;
+  negative = (value < 0) ? true : false;
   if (negative) value = -value;
 
-  char* ptr = buff + STR_BIN_BUFF_SIZE - 1;
+  ptr = buff + STR_BIN_BUFF_SIZE - 1;
   *ptr-- = '\0'; // NULL byte at the end of the string.
 
   if (value != 0) {
     while (value > 0) {
-      *ptr-- = '0' + (value & 1);
+      *ptr-- = (char)('0' + (value & 1));
       value >>= 1;
     }
   } else {
@@ -513,7 +536,7 @@ DEF(coreBin,
   *ptr-- = 'b'; *ptr-- = '0';
   if (negative) *ptr-- = '-';
 
-  uint32_t length = (uint32_t)((buff + STR_BIN_BUFF_SIZE - 1) - (ptr + 1));
+  length = (uint32_t)((buff + STR_BIN_BUFF_SIZE - 1) - (ptr + 1));
   RET(VAR_OBJ(newStringLength(vm, ptr + 1, length)));
 }
 
@@ -521,12 +544,15 @@ DEF(coreHex,
   "hex(value:num) -> string\n"
   "Returns as a hexadecimal value string with '0x' prefix.") {
 
+  char buff[STR_HEX_BUFF_SIZE];
   int64_t value;
+  char* ptr;
+  uint32_t _x;
+  int length;
+  
   if (!validateInteger(vm, ARG(1), &value, "Argument 1")) return;
 
-  char buff[STR_HEX_BUFF_SIZE];
-
-  char* ptr = buff;
+  ptr = buff;
   if (value < 0) *ptr++ = '-';
   *ptr++ = '0'; *ptr++ = 'x';
 
@@ -537,8 +563,8 @@ DEF(coreHex,
 
   // TODO: spritnf limits only to 8 character hex value, we need to do it
   // outself for a maximum of 16 character long (see bin() for reference).
-  uint32_t _x = (uint32_t)((value < 0) ? -value : value);
-  int length = sprintf(ptr, "%x", _x);
+  _x = (uint32_t)((value < 0) ? -value : value);
+  length = sprintf(ptr, "%x", _x);
 
   RET(VAR_OBJ(newStringLength(vm, buff,
     (uint32_t)((ptr + length) - (char*)(buff)))));
@@ -570,12 +596,13 @@ DEF(corePrint,
   "print(...) -> void\n"
   "Write each argument as space seperated, to the stdout and ends with a "
   "newline.") {
+  int i;
 
   // If the host application doesn't provide any write function, discard the
   // output.
   if (vm->config.write_fn == NULL) return;
 
-  for (int i = 1; i <= ARGC; i++) {
+  for (i = 1; i <= ARGC; i++) {
     if (i != 1) vm->config.write_fn(vm, " ");
     vm->config.write_fn(vm, toString(vm, ARG(i))->data);
   }
@@ -587,6 +614,8 @@ DEF(coreInput,
   "input([msg:var]) -> string\n"
   "Read a line from stdin and returns it without the line ending. Accepting "
   "an optional argument [msg] and prints it before reading.") {
+  PkStringPtr result;
+  String* line;
 
   int argc = ARGC;
   if (argc != 1 && argc != 2) {
@@ -600,9 +629,9 @@ DEF(coreInput,
     vm->config.write_fn(vm, toString(vm, ARG(1))->data);
   }
 
-  PkStringPtr result = vm->config.read_fn(vm);
-  String* line = newString(vm, result.string);
-  if (result.on_done) result.on_done(vm, result);
+  result = vm->config.read_fn(vm);
+  line = newString(vm, result.string);
+  if (result.on_done) result.on_done(vm, &result);
   RET(VAR_OBJ(line));
 }
 
@@ -615,13 +644,14 @@ DEF(coreStrChr,
   "str_chr(value:number) -> string\n"
   "Returns the ASCII string value of the integer argument.") {
   int64_t num;
+  char c;
   if (!validateInteger(vm, ARG(1), &num, "Argument 1")) return;
 
   if (!IS_NUM_BYTE(num)) {
     RET_ERR(newString(vm, "The number is not in a byte range."));
   }
 
-  char c = (char)num;
+  c = (char)num;
   RET(VAR_OBJ(newStringLength(vm, &c, 1)));
 }
 
@@ -647,8 +677,10 @@ DEF(coreListAppend,
   "Append the [value] to the list [self] and return the list.") {
 
   List* list;
+  Var elem;
+
   if (!validateArgList(vm, 1, &list)) return;
-  Var elem = ARG(2);
+  elem = ARG(2);
 
   listAppend(vm, list, elem);
   RET(VAR_OBJ(list));
@@ -663,8 +695,10 @@ DEF(coreMapRemove,
   "exists, otherwise it'll return null.") {
 
   Map* map;
+  Var key;
+
   if (!validateArgMap(vm, 1, &map)) return;
-  Var key = ARG(2);
+  key = ARG(2);
 
   RET(mapRemoveKey(vm, map, key));
 }
@@ -675,6 +709,7 @@ DEF(coreMapRemove,
 
 // Create a module and add it to the vm's core modules, returns the script.
 static Script* newModuleInternal(PKVM* vm, const char* name) {
+  Script* scr;
 
   // Create a new Script for the module.
   String* _name = newString(vm, name);
@@ -688,7 +723,7 @@ static Script* newModuleInternal(PKVM* vm, const char* name) {
              "A module named '$' already exists", name)->data);
   }
 
-  Script* scr = newScript(vm, _name);
+  scr = newScript(vm, _name);
   scr->module = _name;
   vmPopTempRef(vm); // _name
 
@@ -733,10 +768,12 @@ static void moduleAddFunctionInternal(PKVM* vm, Script* script,
                                       const char* name, pkNativeFn fptr,
                                       int arity, const char* docstring) {
 
+  Function* fn;
+
   // Ensure the name isn't predefined.
   assertModuleNameDef(vm, script, name);
 
-  Function* fn = newFunction(vm, name, (int)strlen(name),
+  fn = newFunction(vm, name, (int)strlen(name),
                              script, true, docstring);
   fn->native = fptr;
   fn->arity = arity;
@@ -758,9 +795,10 @@ DEF(stdLangGC,
   "gc() -> num\n"
   "Trigger garbage collection and return the amount of bytes cleaned.") {
 
+  size_t garbage;
   size_t bytes_before = vm->bytes_allocated;
   vmCollectGarbage(vm);
-  size_t garbage = bytes_before - vm->bytes_allocated;
+  garbage = bytes_before - vm->bytes_allocated;
   RET(VAR_NUM((double)garbage));
 }
 
@@ -768,13 +806,15 @@ DEF(stdLangDisas,
   "disas(fn:Function) -> String\n"
   "Returns the disassembled opcode of the function [fn].") {
 
+  String* dump;
+  pkByteBuffer buff;
   Function* fn;
+
   if (!validateArgFunction(vm, 1, &fn)) return;
 
-  pkByteBuffer buff;
   pkByteBufferInit(&buff);
   dumpFunctionCode(vm, fn, &buff);
-  String* dump = newString(vm, (const char*)buff.data);
+  dump = newString(vm, (const char*)buff.data);
   pkByteBufferClear(&buff, vm);
 
   RET(VAR_OBJ(dump));
@@ -794,13 +834,14 @@ DEF(stdLangWrite,
   "Write function, just like print function but it wont put space between"
   "args and write a new line at the end.") {
 
+  int i;
+  String* str; //< Will be cleaned by garbage collector;
+
   // If the host application doesn't provide any write function, discard the
   // output.
   if (vm->config.write_fn == NULL) return;
 
-  String* str; //< Will be cleaned by garbage collector;
-
-  for (int i = 1; i <= ARGC; i++) {
+  for (i = 1; i <= ARGC; i++) {
     Var arg = ARG(i);
     // If it's already a string don't allocate a new string instead use it.
     if (IS_OBJ_TYPE(arg, OBJ_STRING)) {
@@ -929,18 +970,19 @@ DEF(stdFiberRun,
   "Runs the fiber's function with the provided arguments and returns it's "
   "return value or the yielded value if it's yielded.") {
 
+  // Buffer of argument to call vmPrepareFiber().
+  Var* args[MAX_ARGC];
+  Fiber* fb;
+  int i;
+
   int argc = ARGC;
   if (argc == 0) // Missing the fiber argument.
     RET_ERR(newString(vm, "Missing argument - fiber."));
 
-  Fiber* fb;
   if (!validateArgFiber(vm, 1, &fb)) return;
 
-  // Buffer of argument to call vmPrepareFiber().
-  Var* args[MAX_ARGC];
-
   // ARG(1) is fiber, function arguments are ARG(2), ARG(3), ... ARG(argc).
-  for (int i = 1; i < argc; i++) {
+  for (i = 1; i < argc; i++) {
     args[i - 1] = &ARG(i + 1);
   }
 
@@ -956,16 +998,17 @@ DEF(stdFiberResume,
   "Resumes a yielded function from a previous call of fiber_run() function. "
   "Return it's return value or the yielded value if it's yielded.") {
 
+  Var value;
+  Fiber* fb;
   int argc = ARGC;
   if (argc == 0) // Missing the fiber argument.
     RET_ERR(newString(vm, "Expected at least 1 argument(s)."));
   if (argc > 2) // Can only accept 1 argument for resume.
     RET_ERR(newString(vm, "Expected at most 2 argument(s)."));
 
-  Fiber* fb;
   if (!validateArgFiber(vm, 1, &fb)) return;
 
-  Var value = (argc == 1) ? VAR_NULL : ARG(2);
+  value = (argc == 1) ? VAR_NULL : ARG(2);
 
   // Switch fiber and resume execution.
   if (vmSwitchFiber(vm, fb, &value)) {
@@ -1026,7 +1069,7 @@ void initializeCore(PKVM* vm) {
   INITIALIZE_BUILTIN_FN("map_remove",  coreMapRemove,  2);
 
   // Core Modules /////////////////////////////////////////////////////////////
-
+  {
   Script* lang = newModuleInternal(vm, "lang");
   MODULE_ADD_FN(lang, "clock", stdLangClock,  0);
   MODULE_ADD_FN(lang, "gc",    stdLangGC,     0);
@@ -1035,7 +1078,9 @@ void initializeCore(PKVM* vm) {
 #ifdef DEBUG
   MODULE_ADD_FN(lang, "debug_break", stdLangDebugBreak, 0);
 #endif
+  }
 
+  {
   Script* math = newModuleInternal(vm, "math");
   MODULE_ADD_FN(math, "floor", stdMathFloor,   1);
   MODULE_ADD_FN(math, "ceil",  stdMathCeil,    1);
@@ -1048,19 +1093,21 @@ void initializeCore(PKVM* vm) {
   MODULE_ADD_FN(math, "cos",   stdMathCosine,  1);
   MODULE_ADD_FN(math, "tan",   stdMathTangent, 1);
   // TODO: low priority - sinh, cosh, tanh, asin, acos, atan.
-
+  
   // Note that currently it's mutable (since it's a global variable, not
   // constant and pocketlang doesn't support constant) so the user shouldn't
   // modify the PI, like in python.
   // TODO: at varSetAttrib() we can detect if the user try to change an
   // attribute of a core module and we can throw an error.
   moduleAddGlobalInternal(vm, math, "PI", VAR_NUM(M_PI));
+  }
 
+  {
   Script* fiber = newModuleInternal(vm, "Fiber");
   MODULE_ADD_FN(fiber, "new",      stdFiberNew,     1);
   MODULE_ADD_FN(fiber, "run",      stdFiberRun,    -1);
   MODULE_ADD_FN(fiber, "resume",   stdFiberResume, -1);
-
+  }
 }
 
 /*****************************************************************************/
@@ -1279,21 +1326,25 @@ bool varLesser(Var v1, Var v2) {
 #undef UNSUPPORTED_OPERAND_TYPES
 
 bool varContains(PKVM* vm, Var elem, Var container) {
+  Object* obj;
   if (!IS_OBJ(container)) {
     VM_SET_ERROR(vm, stringFormat(vm, "'$' is not iterable.",
                  varTypeName(container)));
   }
-  Object* obj = AS_OBJ(container);
+  obj = AS_OBJ(container);
 
   switch (obj->type) {
     case OBJ_STRING: {
+	  String* sub;
+	  String* str;
+
       if (!IS_OBJ_TYPE(elem, OBJ_STRING)) {
         VM_SET_ERROR(vm, stringFormat(vm, "Expected a string operand."));
         return false;
       }
 
-      String* sub = (String*)AS_OBJ(elem);
-      String* str = (String*)AS_OBJ(container);
+      sub = (String*)AS_OBJ(elem);
+      str = (String*)AS_OBJ(container);
       if (sub->length > str->length) return false;
 
       TODO;
@@ -1301,8 +1352,9 @@ bool varContains(PKVM* vm, Var elem, Var container) {
     } break;
 
     case OBJ_LIST: {
+	  uint32_t i;
       List* list = (List*)AS_OBJ(container);
-      for (uint32_t i = 0; i < list->elements.count; i++) {
+      for (i = 0; i < list->elements.count; i++) {
         if (isValuesEqual(elem, list->elements.data[i])) return true;
       }
       return false;
@@ -1353,13 +1405,14 @@ bool varContains(PKVM* vm, Var elem, Var container) {
 
 Var varGetAttrib(PKVM* vm, Var on, String* attrib) {
 
+  Object* obj;
   if (!IS_OBJ(on)) {
     VM_SET_ERROR(vm, stringFormat(vm, "$ type is not subscriptable.",
                                   varTypeName(on)));
     return VAR_NULL;
   }
 
-  Object* obj = AS_OBJ(on);
+  obj = AS_OBJ(on);
   switch (obj->type) {
     case OBJ_STRING:
     {
@@ -1514,13 +1567,15 @@ Var varGetAttrib(PKVM* vm, Var on, String* attrib) {
         TODO;
 
       } else {
+        uint32_t i;
 
         // TODO: Optimize this with binary search.
         Class* ty = inst->ins->type;
-        for (uint32_t i = 0; i < ty->field_names.count; i++) {
-          ASSERT_INDEX(i, ty->field_names.count);
+        for (i = 0; i < ty->field_names.count; i++) {
+          String* f_name;
+		  ASSERT_INDEX(i, ty->field_names.count);
           ASSERT_INDEX(ty->field_names.data[i], ty->owner->names.count);
-          String* f_name = ty->owner->names.data[ty->field_names.data[i]];
+          f_name = ty->owner->names.data[ty->field_names.data[i]];
           if (f_name->hash == attrib->hash &&
               f_name->length == attrib->length &&
               memcmp(f_name->data, attrib->data, attrib->length) == 0) {
@@ -1550,13 +1605,14 @@ do {                                                                          \
   }                                                                           \
 } while (false)
 
+  Object* obj;
   if (!IS_OBJ(on)) {
     VM_SET_ERROR(vm, stringFormat(vm, "$ type is not subscriptable.",
                                   varTypeName(on)));
     return;
   }
 
-  Object* obj = AS_OBJ(on);
+  obj = AS_OBJ(on);
   switch (obj->type) {
     case OBJ_STRING:
       ATTRIB_IMMUTABLE("length");
@@ -1609,9 +1665,10 @@ do {                                                                          \
 
       index = scriptGetClass(scr, attrib->data, attrib->length);
       if (index != -1) {
+		String* name;
         ASSERT_INDEX((uint32_t)index, scr->classes.count);
         ASSERT_INDEX(scr->classes.data[index]->name, scr->names.count);
-        String* name = scr->names.data[scr->classes.data[index]->name];
+        name = scr->names.data[scr->classes.data[index]->name];
         ATTRIB_IMMUTABLE(name->data);
         return;
       }
@@ -1642,13 +1699,15 @@ do {                                                                          \
         return;
 
       } else {
+        uint32_t i;
 
         // TODO: Optimize this with binary search.
         Class* ty = inst->ins->type;
-        for (uint32_t i = 0; i < ty->field_names.count; i++) {
+        for (i = 0; i < ty->field_names.count; i++) {
+		  String* f_name;
           ASSERT_INDEX(i, ty->field_names.count);
           ASSERT_INDEX(ty->field_names.data[i], ty->owner->names.count);
-          String* f_name = ty->owner->names.data[ty->field_names.data[i]];
+          f_name = ty->owner->names.data[ty->field_names.data[i]];
           if (f_name->hash == attrib->hash &&
             f_name->length == attrib->length &&
             memcmp(f_name->data, attrib->data, attrib->length) == 0) {
@@ -1677,16 +1736,18 @@ do {                                                                          \
 #undef ERR_NO_ATTRIB
 
 Var varGetSubscript(PKVM* vm, Var on, Var key) {
+  Object* obj;
   if (!IS_OBJ(on)) {
     VM_SET_ERROR(vm, stringFormat(vm, "$ type is not subscriptable.",
                                   varTypeName(on)));
     return VAR_NULL;
   }
 
-  Object* obj = AS_OBJ(on);
+  obj = AS_OBJ(on);
   switch (obj->type) {
     case OBJ_STRING:
     {
+	  String* c;
       int64_t index;
       String* str = ((String*)obj);
       if (!validateInteger(vm, key, &index, "List index")) {
@@ -1695,7 +1756,7 @@ Var varGetSubscript(PKVM* vm, Var on, Var key) {
       if (!validateIndex(vm, index, str->length, "String")) {
         return VAR_NULL;
       }
-      String* c = newStringLength(vm, str->data + index, 1);
+      c = newStringLength(vm, str->data + index, 1);
       return VAR_OBJ(c);
     }
 
@@ -1747,13 +1808,14 @@ Var varGetSubscript(PKVM* vm, Var on, Var key) {
 }
 
 void varsetSubscript(PKVM* vm, Var on, Var key, Var value) {
+  Object* obj;
   if (!IS_OBJ(on)) {
     VM_SET_ERROR(vm, stringFormat(vm, "$ type is not subscriptable.",
                                   varTypeName(on)));
     return;
   }
 
-  Object* obj = AS_OBJ(on);
+  obj = AS_OBJ(on);
   switch (obj->type) {
     case OBJ_STRING:
       VM_SET_ERROR(vm, newString(vm, "String objects are immutable."));

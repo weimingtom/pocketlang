@@ -10,6 +10,11 @@
 #include "pk_utils.h"
 #include "pk_debug.h"
 
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define inline __inline
+#define trunc(x) (((x) > 0) ? floor(x) : ceil(x))
+#endif
+
 /*****************************************************************************/
 /* VM PUBLIC API                                                             */
 /*****************************************************************************/
@@ -52,11 +57,12 @@ PkCompileOptions pkNewCompilerOptions(void) {
 
 PKVM* pkNewVM(PkConfiguration* config) {
 
+  PKVM* vm;
   PkConfiguration default_config = pkNewConfiguration();
 
   if (config == NULL) config = &default_config;
 
-  PKVM* vm = (PKVM*)config->realloc_fn(NULL, sizeof(PKVM), config->user_data);
+  vm = (PKVM*)config->realloc_fn(NULL, sizeof(PKVM), config->user_data);
   memset(vm, 0, sizeof(PKVM));
 
   vm->config = *config;
@@ -129,17 +135,18 @@ void pkReleaseHandle(PKVM* vm, PkHandle* handle) {
 
 // This function is responsible to call on_done function if it's done with the
 // provided string pointers.
-PkResult pkInterpretSource(PKVM* vm, PkStringPtr source, PkStringPtr path,
+PkResult pkInterpretSource(PKVM* vm, PkStringPtr* source, PkStringPtr* path,
                            const PkCompileOptions* options) {
-
-  String* path_name = newString(vm, path.string);
-  if (path.on_done) path.on_done(vm, path);
+  PkResult result;
+  Script* scr;
+  String* path_name = newString(vm, path->string);
+  if (path->on_done) path->on_done(vm, path);
   vmPushTempRef(vm, &path_name->_super); // path_name.
 
   // TODO: Should I clean the script if it already exists before compiling it?
 
   // Load a new script to the vm's scripts cache.
-  Script* scr = vmGetScript(vm, path_name);
+  scr = vmGetScript(vm, path_name);
   if (scr == NULL) {
     scr = newScript(vm, path_name);
     vmPushTempRef(vm, &scr->_super); // scr.
@@ -149,8 +156,8 @@ PkResult pkInterpretSource(PKVM* vm, PkStringPtr source, PkStringPtr path,
   vmPopTempRef(vm); // path_name.
 
   // Compile the source.
-  PkResult result = compile(vm, scr, source.string, options);
-  if (source.on_done) source.on_done(vm, source);
+  result = compile(vm, scr, source->string, options);
+  if (source->on_done) source->on_done(vm, source);
   if (result != PK_RESULT_SUCCESS) return result;
 
   // Set script initialized to true before the execution ends to prevent cyclic
@@ -162,13 +169,17 @@ PkResult pkInterpretSource(PKVM* vm, PkStringPtr source, PkStringPtr path,
 
 PkResult pkRunFiber(PKVM* vm, PkHandle* fiber,
                     int argc, PkHandle** argv) {
-  __ASSERT(fiber != NULL, "Handle fiber was NULL.");
-  Var fb = fiber->value;
-  __ASSERT(IS_OBJ_TYPE(fb, OBJ_FIBER), "Given handle is not a fiber.");
-  Fiber* _fiber = (Fiber*)AS_OBJ(fb);
-
+  Var fb;
+  Fiber* _fiber;
   Var* args[MAX_ARGC];
-  for (int i = 0; i < argc; i++) {
+  int i;
+
+  __ASSERT(fiber != NULL, "Handle fiber was NULL.");
+  fb = fiber->value;
+  __ASSERT(IS_OBJ_TYPE(fb, OBJ_FIBER), "Given handle is not a fiber.");
+  _fiber = (Fiber*)AS_OBJ(fb);
+
+  for (i = 0; i < argc; i++) {
     args[i] = &(argv[i]->value);
   }
 
@@ -181,10 +192,13 @@ PkResult pkRunFiber(PKVM* vm, PkHandle* fiber,
 }
 
 PkResult pkResumeFiber(PKVM* vm, PkHandle* fiber, PkVar value) {
+  Var fb;
+  Fiber* _fiber;
+
   __ASSERT(fiber != NULL, "Handle fiber was NULL.");
-  Var fb = fiber->value;
+  fb = fiber->value;
   __ASSERT(IS_OBJ_TYPE(fb, OBJ_FIBER), "Given handle is not a fiber.");
-  Fiber* _fiber = (Fiber*)AS_OBJ(fb);
+  _fiber = (Fiber*)AS_OBJ(fb);
 
   if (!vmSwitchFiber(vm, _fiber, (Var*)value)) {
     return PK_RESULT_RUNTIME_ERROR;
@@ -249,6 +263,9 @@ Script* vmGetScript(PKVM* vm, String* path) {
 }
 
 void vmCollectGarbage(PKVM* vm) {
+  uint32_t i;
+  PkHandle* h;
+  Object** ptr;
 
   // Reset VM's bytes_allocated value and count it again so that we don't
   // required to know the size of each object that'll be freeing.
@@ -256,7 +273,7 @@ void vmCollectGarbage(PKVM* vm) {
 
   // Mark the core libs and builtin functions.
   markObject(vm, &vm->core_libs->_super);
-  for (uint32_t i = 0; i < vm->builtins_count; i++) {
+  for (i = 0; i < vm->builtins_count; i++) {
     markObject(vm, &vm->builtins[i].fn->_super);
   }
 
@@ -264,12 +281,12 @@ void vmCollectGarbage(PKVM* vm) {
   markObject(vm, &vm->scripts->_super);
 
   // Mark temp references.
-  for (int i = 0; i < vm->temp_reference_count; i++) {
+  for (i = 0; i < (uint32_t)vm->temp_reference_count; i++) {
     markObject(vm, vm->temp_reference[i]);
   }
 
   // Mark the handles.
-  for (PkHandle* h = vm->handles; h != NULL; h = h->next) {
+  for (h = vm->handles; h != NULL; h = h->next) {
     markValue(vm, h->value);
   }
 
@@ -292,7 +309,7 @@ void vmCollectGarbage(PKVM* vm) {
 
   // [ptr] is an Object* reference that should be equal to the next
   // non-garbage Object*.
-  Object** ptr = &vm->first;
+  ptr = &vm->first;
   while (*ptr != NULL) {
 
     // If the object the pointer points to wasn't marked it's unreachable.
@@ -323,6 +340,8 @@ void vmCollectGarbage(PKVM* vm) {
   } while (false)
 
 bool vmPrepareFiber(PKVM* vm, Fiber* fiber, int argc, Var** argv) {
+  int i;
+
   ASSERT(fiber->func->arity >= -1, OOPS " (Forget to initialize arity.)");
 
   if (argc != fiber->func->arity) {
@@ -357,7 +376,7 @@ bool vmPrepareFiber(PKVM* vm, Fiber* fiber, int argc, Var** argv) {
 
   // ARG1 is fiber, function arguments are ARG(2), ARG(3), ... ARG(argc).
   // And ret[0] is the return value, parameters starts at ret[1], ...
-  for (int i = 0; i < argc; i++) {
+  for (i = 0; i < argc; i++) {
     fiber->ret[1 + i] = *argv[i]; // +1: ret[0] is return value.
   }
   fiber->sp += argc; // Parameters.
@@ -441,12 +460,15 @@ static void* defaultRealloc(void* memory, size_t new_size, void* user_data) {
 // the provided result's string's on_done() will be called and, it's string
 // will be updated with the new resolved path string.
 static inline bool resolveScriptPath(PKVM* vm, PkStringPtr* path_string) {
+  const char* path;
+  PkStringPtr resolved;
+  Fiber* fiber;
+
   if (vm->config.resolve_path_fn == NULL) return true;
 
-  const char* path = path_string->string;
-  PkStringPtr resolved;
-
-  Fiber* fiber = vm->fiber;
+  path = path_string->string;
+  
+  fiber = vm->fiber;
   if (fiber == NULL || fiber->frame_count <= 0) {
     // fiber == NULL => vm haven't started yet and it's a root script.
     resolved = vm->config.resolve_path_fn(vm, NULL, path);
@@ -456,7 +478,7 @@ static inline bool resolveScriptPath(PKVM* vm, PkStringPtr* path_string) {
   }
 
   // Done with the last string and update it with the new string.
-  if (path_string->on_done != NULL) path_string->on_done(vm, *path_string);
+  if (path_string->on_done != NULL) path_string->on_done(vm, path_string);
   *path_string = resolved;
 
   return path_string->string != NULL;
@@ -466,13 +488,13 @@ static inline bool resolveScriptPath(PKVM* vm, PkStringPtr* path_string) {
 // compiled here it'll set [is_new_script] to true otherwise (using the cached
 // script) set to false.
 static inline Var importScript(PKVM* vm, String* path_name) {
-
+  Var entry;
   // Check in the core libs.
   Script* scr = getCoreLib(vm, path_name);
   if (scr != NULL) return VAR_OBJ(scr);
 
   // Check in the scripts cache.
-  Var entry = mapGet(vm->scripts, VAR_OBJ(path_name));
+  entry = mapGet(vm->scripts, VAR_OBJ(path_name));
   if (!IS_UNDEF(entry)) {
     ASSERT(AS_OBJ(entry)->type == OBJ_SCRIPT, OOPS);
     return entry;
@@ -485,11 +507,14 @@ static inline Var importScript(PKVM* vm, String* path_name) {
 }
 
 static inline void growStack(PKVM* vm, int size) {
+  int new_size;
+  Var* old_rbp;
+  int i;
   Fiber* fiber = vm->fiber;
   ASSERT(fiber->stack_size <= size, OOPS);
-  int new_size = utilPowerOf2Ceil(size);
+  new_size = utilPowerOf2Ceil(size);
 
-  Var* old_rbp = fiber->stack; //< Old stack base pointer.
+  old_rbp = fiber->stack; //< Old stack base pointer.
   fiber->stack = (Var*)vmRealloc(vm, fiber->stack,
                                  sizeof(Var) * fiber->stack_size,
                                  sizeof(Var) * new_size);
@@ -523,13 +548,16 @@ static inline void growStack(PKVM* vm, int size) {
   fiber->ret = MAP_PTR(fiber->ret);
 
   // Update the stack base pointer of the call frames.
-  for (int i = 0; i < fiber->frame_count; i++) {
+  for (i = 0; i < fiber->frame_count; i++) {
     CallFrame* frame = fiber->frames + i;
     frame->rbp = MAP_PTR(frame->rbp);
   }
 }
 
 static inline void pushCallFrame(PKVM* vm, const Function* fn, Var* rbp) {
+  int needed;
+  CallFrame* frame;
+
   ASSERT(!fn->is_native, "Native function shouldn't use call frames.");
 
   // Grow the stack frame if needed.
@@ -542,10 +570,10 @@ static inline void pushCallFrame(PKVM* vm, const Function* fn, Var* rbp) {
   }
 
   // Grow the stack if needed.
-  int needed = fn->fn->stack_size + (int)(vm->fiber->sp - vm->fiber->stack);
+  needed = fn->fn->stack_size + (int)(vm->fiber->sp - vm->fiber->stack);
   if (vm->fiber->stack_size <= needed) growStack(vm, needed);
 
-  CallFrame* frame = vm->fiber->frames + vm->fiber->frame_count++;
+  frame = vm->fiber->frames + vm->fiber->frame_count++;
   *rbp = VAR_NULL;
   frame->rbp = rbp;
   frame->fn = fn;
@@ -553,22 +581,27 @@ static inline void pushCallFrame(PKVM* vm, const Function* fn, Var* rbp) {
 }
 
 static inline void reuseCallFrame(PKVM* vm, const Function* fn) {
+  Fiber* fb;
+  CallFrame* frame;
+  Var* arg;
+  Var* target;
+  int needed;
 
   ASSERT(!fn->is_native, "Native function shouldn't use call frames.");
   ASSERT(fn->arity >= 0, OOPS);
   ASSERT(vm->fiber->frame_count > 0, OOPS);
 
-  Fiber* fb = vm->fiber;
+  fb = vm->fiber;
 
-  CallFrame* frame = fb->frames + fb->frame_count - 1;
+  frame = fb->frames + fb->frame_count - 1;
   frame->fn = fn;
   frame->ip = fn->fn->opcodes.data;
 
   ASSERT(*frame->rbp == VAR_NULL, OOPS);
 
   // Move all the argument(s) to the base of the current frame.
-  Var* arg = fb->sp - fn->arity;
-  Var* target = frame->rbp + 1;
+  arg = fb->sp - fn->arity;
+  target = frame->rbp + 1;
   for (; arg < fb->sp; arg++, target++) {
     *target = *arg;
   }
@@ -577,23 +610,27 @@ static inline void reuseCallFrame(PKVM* vm, const Function* fn) {
   fb->sp = target;
 
   // Grow the stack if needed (least probably).
-  int needed = fn->fn->stack_size + (int)(vm->fiber->sp - vm->fiber->stack);
+  needed = fn->fn->stack_size + (int)(vm->fiber->sp - vm->fiber->stack);
   if (vm->fiber->stack_size <= needed) growStack(vm, needed);
 }
 
 static void reportError(PKVM* vm) {
+  Fiber* fiber;
+  int i;
+
   ASSERT(VM_HAS_ERROR(vm), "runtimeError() should be called after an error.");
   // TODO: pass the error to the caller of the fiber.
 
   // Print the Error message and stack trace.
   if (vm->config.error_fn == NULL) return;
-  Fiber* fiber = vm->fiber;
+  fiber = vm->fiber;
   vm->config.error_fn(vm, PK_ERROR_RUNTIME, NULL, -1, fiber->error->data);
-  for (int i = fiber->frame_count - 1; i >= 0; i--) {
-    CallFrame* frame = &fiber->frames[i];
+  for (i = fiber->frame_count - 1; i >= 0; i--) {
+    int line;
+	CallFrame* frame = &fiber->frames[i];
     const Function* fn = frame->fn;
     ASSERT(!fn->is_native, OOPS);
-    int line = fn->fn->oplines.data[frame->ip - fn->fn->opcodes.data - 1];
+    line = fn->fn->oplines.data[frame->ip - fn->fn->opcodes.data - 1];
     vm->config.error_fn(vm, PK_ERROR_STACKTRACE, fn->owner->path->data, line,
                         fn->name);
   }
@@ -604,6 +641,14 @@ static void reportError(PKVM* vm) {
  *****************************************************************************/
 
 static PkResult runFiber(PKVM* vm, Fiber* fiber) {
+  Opcode instruction;
+
+  // The instruction pointer.
+  register const uint8_t* ip;
+
+  register Var* rbp;         //< Stack base pointer register.
+  register CallFrame* frame; //< Current call frame.
+  register Script* script;   //< Currently executing script.
 
   // Set the fiber as the vm's current fiber (another root object) to prevent
   // it from garbage collection and get the reference from native functions.
@@ -612,12 +657,7 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
   ASSERT(fiber->state == FIBER_NEW || fiber->state == FIBER_YIELDED, OOPS);
   fiber->state = FIBER_RUNNING;
 
-  // The instruction pointer.
-  register const uint8_t* ip;
 
-  register Var* rbp;         //< Stack base pointer register.
-  register CallFrame* frame; //< Current call frame.
-  register Script* script;   //< Currently executing script.
 
 #if DEBUG
   #define PUSH(value)                                                        \
@@ -696,7 +736,7 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
   #define DEBUG_CALL_STACK() NO_OP
 #endif
 
-#define SWITCH() Opcode instruction; switch (instruction = (Opcode)READ_BYTE())
+#define SWITCH() /*Opcode instruction;*/ switch (instruction = (Opcode)READ_BYTE())
 #define OPCODE(code) case OP_##code
 #define DISPATCH()   goto L_vm_main_loop
 
@@ -760,9 +800,10 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
 
     OPCODE(PUSH_INSTANCE):
     {
+	  Instance* inst;
       uint8_t index = READ_BYTE();
       ASSERT_INDEX(index, script->classes.count);
-      Instance* inst = newInstance(vm, script->classes.data[index], false);
+      inst = newInstance(vm, script->classes.data[index], false);
       PUSH(VAR_OBJ(inst));
       DISPATCH();
     }
@@ -799,13 +840,15 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
 
     OPCODE(INST_APPEND):
     {
+	  Inst* ins;
+	  Instance* inst_p;
       Var value = PEEK(-1); // Don't pop yet, we need the reference for gc.
       Var inst = PEEK(-2);
       ASSERT(IS_OBJ_TYPE(inst, OBJ_INST), OOPS);
 
-      Instance* inst_p = (Instance*)AS_OBJ(inst);
+      inst_p = (Instance*)AS_OBJ(inst);
       ASSERT(!inst_p->is_native, OOPS);
-      Inst* ins = inst_p->ins;
+      ins = inst_p->ins;
       pkVarBufferWrite(&ins->fields, vm, value);
       DROP(); // value
 
@@ -872,27 +915,30 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
 
     OPCODE(PUSH_FN):
     {
+	  Function* fn;
       uint8_t index = READ_BYTE();
       ASSERT_INDEX(index, script->functions.count);
-      Function* fn = script->functions.data[index];
+      fn = script->functions.data[index];
       PUSH(VAR_OBJ(fn));
       DISPATCH();
     }
 
     OPCODE(PUSH_TYPE):
     {
+	  Class* ty;
       uint8_t index = READ_BYTE();
       ASSERT_INDEX(index, script->classes.count);
-      Class* ty = script->classes.data[index];
+      ty = script->classes.data[index];
       PUSH(VAR_OBJ(ty));
       DISPATCH();
     }
 
     OPCODE(PUSH_BUILTIN_FN):
     {
+	  Function* fn;
       uint8_t index = READ_BYTE();
       ASSERT_INDEX(index, vm->builtins_count);
-      Function* fn = vm->builtins[index].fn;
+      fn = vm->builtins[index].fn;
       PUSH(VAR_OBJ(fn));
       DISPATCH();
     }
@@ -945,8 +991,9 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
 
       // -1 argument means multiple number of args.
       if (fn->arity != -1 && fn->arity != argc) {
-        char buff[STR_INT_BUFF_SIZE]; sprintf(buff, "%d", fn->arity);
-        String* msg = stringFormat(vm, "Expected exactly $ argument(s).",
+        String* msg;
+		char buff[STR_INT_BUFF_SIZE]; sprintf(buff, "%d", fn->arity);
+        msg = stringFormat(vm, "Expected exactly $ argument(s).",
                                    buff);
         RUNTIME_ERROR(msg);
       }
@@ -1020,6 +1067,9 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
 
     OPCODE(ITER):
     {
+	  Object* obj;
+	  double it;
+
       Var* value    = (vm->fiber->sp - 1);
       Var* iterator = (vm->fiber->sp - 2);
       Var seq       = PEEK(-3);
@@ -1032,10 +1082,10 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
       } while (false)
 
       ASSERT(IS_NUM(*iterator), OOPS);
-      double it = AS_NUM(*iterator); //< Nth iteration.
+      it = AS_NUM(*iterator); //< Nth iteration.
       ASSERT(AS_NUM(*iterator) == (int32_t)trunc(it), OOPS);
 
-      Object* obj = AS_OBJ(seq);
+      obj = AS_OBJ(seq);
       switch (obj->type) {
 
         case OBJ_STRING: {
@@ -1061,11 +1111,12 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
         } DISPATCH();
 
         case OBJ_MAP: {
+		  MapEntry* e;
           uint32_t iter = (int32_t)trunc(it);
 
           Map* map = (Map*)obj;
           if (map->entries == NULL) JUMP_ITER_EXIT();
-          MapEntry* e = map->entries + iter;
+          e = map->entries + iter;
           for (; iter < map->capacity; iter++, e++) {
             if (!IS_UNDEF(e->key)) break;
           }
@@ -1077,11 +1128,11 @@ static PkResult runFiber(PKVM* vm, Fiber* fiber) {
         } DISPATCH();
 
         case OBJ_RANGE: {
-          double from = ((Range*)obj)->from;
+          double current;
+		  double from = ((Range*)obj)->from;
           double to = ((Range*)obj)->to;
           if (from == to) JUMP_ITER_EXIT();
 
-          double current;
           if (from <= to) { //< Straight range.
             current = from + it;
           } else {          //< Reversed range.

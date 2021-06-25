@@ -11,6 +11,10 @@
 #include <ctype.h> // isspace
 #include "utils.h"
 
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define inline __inline
+#endif
+
 // FIXME: use fgetc char by char till reach a new line.
 // TODO: Will need refactoring to use a byte buffer.
 //
@@ -18,12 +22,13 @@
 // an optional argument [length] (could be NULL). Note that the returned string
 // is heap allocated and should be cleaned by 'free()' function.
 const char* read_line(uint32_t* length) {
+  size_t len;
   const int size = 1024;
   char* mem = (char*)malloc(size);
   if (fgets(mem, size, stdin) == NULL) {
     // TODO: handle error.
   }
-  size_t len = strlen(mem);
+  len = strlen(mem);
 
   // FIXME: handle \r\n, this is temp.
   mem[len - 1] = '\0';
@@ -47,9 +52,10 @@ static void readLine(ByteBuffer* buff) {
 // Returns true if the string is empty, used to check if the input line is
 // empty to skip compilation of empty string.
 static inline bool is_str_empty(const char* line) {
+  const char* c;
   ASSERT(line != NULL, OOPS);
 
-  for (const char* c = line; *c != '\0'; c++) {
+  for (c = line; *c != '\0'; c++) {
     if (!isspace(*c)) return false;
   }
   return true;
@@ -57,28 +63,32 @@ static inline bool is_str_empty(const char* line) {
 
 // The main loop of the REPL. Will return the exit code.
 int repl(PKVM* vm, const PkCompileOptions* options) {
+  PkHandle* module;
+  ByteBuffer lines;
+  ByteBuffer line;
+  bool need_more_lines;
+  bool done;
 
   // Set repl_mode of the user_data.
   VmUserData* user_data = (VmUserData*)pkGetUserData(vm);
   user_data->repl_mode = true;
 
   // The main module that'll be used to compile and execute the input source.
-  PkHandle* module = pkNewModule(vm, "$(REPL)");
+  module = pkNewModule(vm, "$(REPL)");
 
   // A buffer to store lines read from stdin.
-  ByteBuffer lines;
   byteBufferInit(&lines);
 
   // A buffer to store a line read from stdin.
-  ByteBuffer line;
   byteBufferInit(&line);
 
   // Will be set to true if the compilation failed with unexpected EOF to add
   // more lines to the [lines] buffer.
-  bool need_more_lines = false;
+  need_more_lines = false;
 
-  bool done = false;
+  done = false;
   do {
+	bool is_empty;
 
     // Print the input listening line.
     if (!need_more_lines) {
@@ -89,7 +99,7 @@ int repl(PKVM* vm, const PkCompileOptions* options) {
 
     // Read a line from stdin and add the line to the lines buffer.
     readLine(&line);
-    bool is_empty = is_str_empty((const char*)line.data);
+    is_empty = is_str_empty((const char*)line.data);
 
     // If the line is empty, we don't have to compile it.
     if (is_empty && !need_more_lines) {
@@ -104,8 +114,12 @@ int repl(PKVM* vm, const PkCompileOptions* options) {
     byteBufferWrite(&lines, '\0');
 
     // Compile the buffer to the module.
+	{
+	PkHandle* _main;
+	PkHandle* fiber;
+
     PkStringPtr source_ptr = { (const char*)lines.data, NULL, NULL };
-    PkResult result = pkCompileModule(vm, module, source_ptr, options);
+    PkResult result = pkCompileModule(vm, module, &source_ptr, options);
 
     if (result == PK_RESULT_UNEXPECTED_EOF) {
       ASSERT(lines.count > 0 && lines.data[lines.count - 1] == '\0', OOPS);
@@ -123,12 +137,12 @@ int repl(PKVM* vm, const PkCompileOptions* options) {
     if (result != PK_RESULT_SUCCESS) continue;
 
     // Compiled source would be the "main" function of the module. Run it.
-    PkHandle* _main = pkGetFunction(vm, module, PK_IMPLICIT_MAIN_NAME);
-    PkHandle* fiber = pkNewFiber(vm, _main);
+    _main = pkGetFunction(vm, module, PK_IMPLICIT_MAIN_NAME);
+    fiber = pkNewFiber(vm, _main);
     result = pkRunFiber(vm, fiber, 0, NULL);
     pkReleaseHandle(vm, _main);
     pkReleaseHandle(vm, fiber);
-
+	}
   } while (!done);
 
   byteBufferClear(&lines);

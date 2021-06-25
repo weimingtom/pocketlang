@@ -15,9 +15,9 @@ const char* read_line(uint32_t* length);
 
 // ---------------------------------------
 
-void onResultDone(PKVM* vm, PkStringPtr result) {
-  if ((bool)result.user_data) {
-    free((void*)result.string);
+void onResultDone(PKVM* vm, PkStringPtr* result) {
+  if ((bool)result->user_data) {
+    free((void*)result->string);
   }
 }
 
@@ -55,10 +55,10 @@ PkStringPtr readFunction(PKVM* vm) {
 }
 
 PkStringPtr resolvePath(PKVM* vm, const char* from, const char* path) {
+  size_t from_dir_len;
   PkStringPtr result;
   result.on_done = onResultDone;
 
-  size_t from_dir_len;
   pathGetDirName(from, &from_dir_len);
 
   // FIXME: Should handle paths with size of more than FILENAME_MAX.
@@ -73,14 +73,17 @@ PkStringPtr resolvePath(PKVM* vm, const char* from, const char* path) {
     result.user_data = (void*)true;
 
   } else {
-    char from_dir[FILENAME_MAX];
+    char fullpath[FILENAME_MAX];
+    char* resolved;
+    size_t length;
+
+	char from_dir[FILENAME_MAX];
     strncpy(from_dir, from, from_dir_len);
     from_dir[from_dir_len] = '\0';
 
-    char fullpath[FILENAME_MAX];
-    size_t length = pathJoin(from_dir, path, fullpath, sizeof(fullpath));
+    length = pathJoin(from_dir, path, fullpath, sizeof(fullpath));
 
-    char* resolved = (char*)malloc(length + 1);
+    resolved = (char*)malloc(length + 1);
     pathNormalize(fullpath, resolved, length + 1);
 
     result.string = resolved;
@@ -91,12 +94,16 @@ PkStringPtr resolvePath(PKVM* vm, const char* from, const char* path) {
 }
 
 PkStringPtr loadScript(PKVM* vm, const char* path) {
+  FILE* file;
+  char* buff;
+  long file_size;
+  size_t read;
 
   PkStringPtr result;
   result.on_done = onResultDone;
 
   // Open the file.
-  FILE* file = fopen(path, "r");
+  file = fopen(path, "r");
   if (file == NULL) {
     // Setting .string to NULL to indicate the failure of loading the script.
     result.string = NULL;
@@ -105,14 +112,14 @@ PkStringPtr loadScript(PKVM* vm, const char* path) {
 
   // Get the source length.
   fseek(file, 0, SEEK_END);
-  long file_size = ftell(file);
+  file_size = ftell(file);
   fseek(file, 0, SEEK_SET);
 
   // Read source to buffer.
-  char* buff = (char*)malloc((size_t)(file_size) + 1);
+  buff = (char*)malloc((size_t)(file_size) + 1);
   // Using read instead of file_size is because "\r\n" is read as '\n' in
   // windows.
-  size_t read = fread(buff, sizeof(char), file_size, file);
+  read = fread(buff, sizeof(char), file_size, file);
   buff[read] = '\0';
   fclose(file);
 
@@ -170,6 +177,11 @@ int main(int argc, char** argv) {
 
   // Parse the options.
   struct argparse argparse;
+  int exitcode;
+  PkCompileOptions options;
+  PKVM* vm;
+  VmUserData user_data;
+
   argparse_init(&argparse, cli_opts, usage, 0);
   argc = argparse_parse(&argparse, argc, argv);
 
@@ -183,24 +195,23 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  int exitcode = 0;
+  exitcode = 0;
 
   // Create and initialize pocket VM.
-  PKVM* vm = intializePocketVM();
-  VmUserData user_data;
+  vm = intializePocketVM();
   user_data.repl_mode = false;
   pkSetUserData(vm, &user_data);
 
   registerModules(vm);
 
-  PkCompileOptions options = pkNewCompilerOptions();
+  options = pkNewCompilerOptions();
   options.debug = debug;
 
   if (cmd != NULL) { // pocket -c "print('foo')"
 
     PkStringPtr source = { cmd, NULL, NULL };
     PkStringPtr path = { "$(Source)", NULL, NULL };
-    PkResult result = pkInterpretSource(vm, source, path, NULL);
+    PkResult result = pkInterpretSource(vm, &source, &path, NULL);
     exitcode = (int)result;
 
   } if (argc == 0) { // Run on REPL mode.
@@ -219,12 +230,12 @@ int main(int argc, char** argv) {
     PkStringPtr source = loadScript(vm, resolved.string);
 
     if (source.string != NULL) {
-      PkResult result = pkInterpretSource(vm, source, resolved, &options);
+      PkResult result = pkInterpretSource(vm, &source, &resolved, &options);
       exitcode = (int)result;
     } else {
       fprintf(stderr, "Error: cannot open file at \"%s\"\n", resolved.string);
-      if (resolved.on_done != NULL) resolved.on_done(vm, resolved);
-      if (source.on_done != NULL) source.on_done(vm, source);
+      if (resolved.on_done != NULL) resolved.on_done(vm, &resolved);
+      if (source.on_done != NULL) source.on_done(vm, &source);
     }
   }
 

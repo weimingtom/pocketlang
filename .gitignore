@@ -1,3 +1,8 @@
+*.ncb
+*.opt
+*.plg
+/vc6_proj/Debug/
+/vc6_proj/Release/
 
 # PocketLang ignore list
 .idea/

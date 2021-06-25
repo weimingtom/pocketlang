@@ -169,7 +169,7 @@ typedef void (*pkFreeInstFn) (PKVM* vm, void* instance);
 typedef const char* (*pkInstNameFn) (uint32_t id);
 
 // A function callback symbol for clean/free the pkStringResult.
-typedef void (*pkResultDoneFn) (PKVM* vm, PkStringPtr result);
+typedef void (*pkResultDoneFn) (PKVM* vm, PkStringPtr* result);
 
 // A function callback to resolve the import script name from the [from] path
 // to an absolute (or relative to the cwd). This is required to solve same
@@ -241,7 +241,7 @@ PK_PUBLIC PkHandle* pkGetFunction(PKVM* vm, PkHandle* module,
 // Compile the [module] with the provided [source]. Set the compiler options
 // with the the [options] argument or set to NULL for default options.
 PK_PUBLIC PkResult pkCompileModule(PKVM* vm, PkHandle* module,
-                                   PkStringPtr source,
+                                   PkStringPtr* source,
                                    const PkCompileOptions* options);
 
 // Interpret the source and return the result. Once it's done with the source
@@ -249,8 +249,8 @@ PK_PUBLIC PkResult pkCompileModule(PKVM* vm, PkHandle* module,
 // Set the compiler options with the the [options] argument or it can be set to
 // NULL for default options.
 PK_PUBLIC PkResult pkInterpretSource(PKVM* vm,
-                                     PkStringPtr source,
-                                     PkStringPtr path,
+                                     PkStringPtr* source,
+                                     PkStringPtr* path,
                                      const PkCompileOptions* options);
 
 // Runs the fiber's function with the provided arguments (param [arc] is the

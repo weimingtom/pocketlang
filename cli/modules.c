@@ -5,6 +5,10 @@
 
 #include "modules.h"
 
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define inline __inline
+#endif
+
 // Allocate a new module object of type [Ty].
 #define NEW_OBJ(Ty) (Ty*)malloc(sizeof(Ty))
 
@@ -141,32 +145,40 @@ static void _pathGetCWD(PKVM* vm) {
 }
 
 static void _pathAbspath(PKVM* vm) {
+  char abspath[FILENAME_MAX];
+  size_t len;
   const char* path;
+
   if (!pkGetArgString(vm, 1, &path, NULL)) return;
 
-  char abspath[FILENAME_MAX];
-  size_t len = pathAbs(path, abspath, sizeof(abspath));
+  len = pathAbs(path, abspath, sizeof(abspath));
   pkReturnStringLength(vm, abspath, len);
 }
 
 static void _pathRelpath(PKVM* vm) {
+  char abs_from[FILENAME_MAX];
+  char abs_path[FILENAME_MAX];
+  char result[FILENAME_MAX];
+  size_t len;
   const char* from, * path;
+
   if (!pkGetArgString(vm, 1, &from, NULL)) return;
   if (!pkGetArgString(vm, 2, &path, NULL)) return;
 
-  char abs_from[FILENAME_MAX];
   pathAbs(from, abs_from, sizeof(abs_from));
 
-  char abs_path[FILENAME_MAX];
   pathAbs(path, abs_path, sizeof(abs_path));
 
-  char result[FILENAME_MAX];
-  size_t len = cwk_path_get_relative(abs_from, abs_path,
+  len = cwk_path_get_relative(abs_from, abs_path,
     result, sizeof(result));
   pkReturnStringLength(vm, result, len);
 }
 
 static void _pathJoin(PKVM* vm) {
+  int i;
+  char result[FILENAME_MAX];
+  size_t len;
+
   const char* paths[MAX_JOIN_PATHS + 1]; // +1 for NULL.
   int argc = pkGetArgc(vm);
 
@@ -176,40 +188,40 @@ static void _pathJoin(PKVM* vm) {
     return;
   }
 
-  for (int i = 0; i < argc; i++) {
+  for (i = 0; i < argc; i++) {
     pkGetArgString(vm, i + 1, &paths[i], NULL);
   }
   paths[argc] = NULL;
 
-  char result[FILENAME_MAX];
-  size_t len = cwk_path_join_multiple(paths, result, sizeof(result));
+  len = cwk_path_join_multiple(paths, result, sizeof(result));
   pkReturnStringLength(vm, result, len);
 }
 
 static void _pathNormalize(PKVM* vm) {
+  char result[FILENAME_MAX];
+  size_t len;
   const char* path;
   if (!pkGetArgString(vm, 1, &path, NULL)) return;
 
-  char result[FILENAME_MAX];
-  size_t len = cwk_path_normalize(path, result, sizeof(result));
+  len = cwk_path_normalize(path, result, sizeof(result));
   pkReturnStringLength(vm, result, len);
 }
 
 static void _pathBaseName(PKVM* vm) {
+  const char* base_name;
+  size_t length;
   const char* path;
   if (!pkGetArgString(vm, 1, &path, NULL)) return;
 
-  const char* base_name;
-  size_t length;
   cwk_path_get_basename(path, &base_name, &length);
   pkReturnString(vm, base_name);
 }
 
 static void _pathDirName(PKVM* vm) {
+  size_t length;
   const char* path;
   if (!pkGetArgString(vm, 1, &path, NULL)) return;
 
-  size_t length;
   cwk_path_get_dirname(path, &length);
   pkReturnStringLength(vm, path, length);
 }
@@ -222,11 +234,11 @@ static void _pathIsPathAbs(PKVM* vm) {
 }
 
 static void _pathGetExtension(PKVM* vm) {
+  const char* ext;
+  size_t length;
   const char* path;
   if (!pkGetArgString(vm, 1, &path, NULL)) return;
 
-  const char* ext;
-  size_t length;
   if (cwk_path_get_extension(path, &ext, &length)) {
     pkReturnStringLength(vm, ext, length);
   } else {
@@ -277,7 +289,10 @@ void registerModulePath(PKVM* vm) {
 /*****************************************************************************/
 
 static void _fileOpen(PKVM* vm) {
-
+  FileAccessMode mode;
+  const char* mode_str;
+  const char* path;
+  FILE* fp;
   // TODO: handle arg range using pocketlang native api.
   // 1 <= argc <= 2
   int argc = pkGetArgc(vm);
@@ -289,11 +304,10 @@ static void _fileOpen(PKVM* vm) {
     return;
   }
 
-  const char* path;
   if (!pkGetArgString(vm, 1, &path, NULL)) return;
 
-  const char* mode_str = "r";
-  FileAccessMode mode = FMODE_READ;
+  mode_str = "r";
+  mode = FMODE_READ;
 
   if (argc == 2) {
     if (!pkGetArgString(vm, 2, &mode_str, NULL)) return;
@@ -314,7 +328,7 @@ static void _fileOpen(PKVM* vm) {
     } while (false);
   }
 
-  FILE* fp = fopen(path, mode_str);
+  fp = fopen(path, mode_str);
 
   if (fp != NULL) {
     File* file = NEW_OBJ(File);
@@ -330,6 +344,7 @@ static void _fileOpen(PKVM* vm) {
 }
 
 static void _fileRead(PKVM* vm) {
+  char buff[2048];
   File* file;
   if (!pkGetArgInst(vm, 1, OBJ_FILE, (void**)&file)) return;
 
@@ -344,7 +359,6 @@ static void _fileRead(PKVM* vm) {
   }
 
   // TODO: this is temproary.
-  char buff[2048];
   fread((void*)buff, sizeof(char), sizeof(buff), file->fp);
   pkReturnString(vm, (const char*)buff);
 }

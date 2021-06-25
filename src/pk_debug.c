@@ -73,6 +73,11 @@ void dumpFunctionCode(PKVM* vm, Function* func, pkByteBuffer* buff) {
   } while (false)
 
   while (i < func->fn->opcodes.count) {
+    const char* op_name;
+	uint32_t j;
+	uint32_t op_length;
+	Opcode op;
+
     ASSERT_INDEX(i, func->fn->opcodes.count);
 
     // Prints the line number.
@@ -93,20 +98,21 @@ void dumpFunctionCode(PKVM* vm, Function* func, pkByteBuffer* buff) {
     ADD_INTEGER(vm, buff, i, INT_WIDTH - 1);
     pkByteBufferAddString(buff, vm, STR_AND_LEN("  "));
 
-    const char* op_name = op_names[opcodes[i]];
-    uint32_t op_length = (uint32_t)strlen(op_name);
+    op_name = op_names[opcodes[i]];
+    op_length = (uint32_t)strlen(op_name);
     pkByteBufferAddString(buff, vm, op_name, op_length);
-    for (uint32_t j = 0; j < 16 - op_length; j++) { // Padding.
+    for (j = 0; j < 16 - op_length; j++) { // Padding.
       ADD_CHAR(vm, buff, ' ');
     }
 
-    Opcode op = (Opcode)func->fn->opcodes.data[i++];
+    op = (Opcode)func->fn->opcodes.data[i++];
     switch (op) {
       case OP_PUSH_CONSTANT:
       {
+		Var value;
         int index = READ_SHORT();
         ASSERT_INDEX((uint32_t)index, func->owner->literals.count);
-        Var value = func->owner->literals.data[index];
+        value = func->owner->literals.data[index];
 
         // Prints: %5d [val]\n
         ADD_INTEGER(vm, buff, index, INT_WIDTH);
@@ -127,11 +133,13 @@ void dumpFunctionCode(PKVM* vm, Function* func, pkByteBuffer* buff) {
       case OP_PUSH_LIST:     SHORT_ARG(); break;
       case OP_PUSH_INSTANCE:
       {
+		uint32_t name_ind;
+		String* ty_name;
         int ty_index = READ_BYTE();
         ASSERT_INDEX((uint32_t)ty_index, func->owner->classes.count);
-        uint32_t name_ind = func->owner->classes.data[ty_index]->name;
+        name_ind = func->owner->classes.data[ty_index]->name;
         ASSERT_INDEX(name_ind, func->owner->names.count);
-        String* ty_name = func->owner->names.data[name_ind];
+        ty_name = func->owner->names.data[name_ind];
 
         // Prints: %5d [Ty:%s]\n
         ADD_INTEGER(vm, buff, ty_index, INT_WIDTH);
@@ -163,8 +171,9 @@ void dumpFunctionCode(PKVM* vm, Function* func, pkByteBuffer* buff) {
           ADD_INTEGER(vm, buff, arg, INT_WIDTH);
 
         } else {
+		  int j;
           arg = (int)(op - OP_PUSH_LOCAL_0);
-          for (int j = 0; j < INT_WIDTH; j++) ADD_CHAR(vm, buff, ' ');
+          for (j = 0; j < INT_WIDTH; j++) ADD_CHAR(vm, buff, ' ');
         }
 
         if (arg < func->arity) {
@@ -196,8 +205,9 @@ void dumpFunctionCode(PKVM* vm, Function* func, pkByteBuffer* buff) {
           ADD_INTEGER(vm, buff, arg, INT_WIDTH);
 
         } else {
+		  int j;
           arg = (int)(op - OP_STORE_LOCAL_0);
-          for (int j = 0; j < INT_WIDTH; j++) ADD_CHAR(vm, buff, ' ');
+          for (j = 0; j < INT_WIDTH; j++) ADD_CHAR(vm, buff, ' ');
         }
 
         if (arg < func->arity) {
@@ -242,11 +252,13 @@ void dumpFunctionCode(PKVM* vm, Function* func, pkByteBuffer* buff) {
 
       case OP_PUSH_TYPE:
       {
+		String* ty_name;
+		uint32_t name_ind;
         int ty_index = READ_BYTE();
         ASSERT_INDEX((uint32_t)ty_index, func->owner->classes.count);
-        uint32_t name_ind = func->owner->classes.data[ty_index]->name;
+        name_ind = func->owner->classes.data[ty_index]->name;
         ASSERT_INDEX(name_ind, func->owner->names.count);
-        String* ty_name = func->owner->names.data[name_ind];
+        ty_name = func->owner->names.data[name_ind];
 
         // Prints: %5d [Ty:%s]\n
         ADD_INTEGER(vm, buff, ty_index, INT_WIDTH);
@@ -409,19 +421,22 @@ void dumpFunctionCode(PKVM* vm, Function* func, pkByteBuffer* buff) {
 //}
 
 void dumpGlobalValues(PKVM* vm) {
+  Script* scr;
+  CallFrame* frame;
+  uint32_t i;
   Fiber* fiber = vm->fiber;
   int frame_ind = fiber->frame_count - 1;
   ASSERT(frame_ind >= 0, OOPS);
-  CallFrame* frame = &fiber->frames[frame_ind];
-  Script* scr = frame->fn->owner;
+  frame = &fiber->frames[frame_ind];
+  scr = frame->fn->owner;
 
-  for (uint32_t i = 0; i < scr->global_names.count; i++) {
-    String* name = scr->names.data[scr->global_names.data[i]];
+  for (i = 0; i < scr->global_names.count; i++) {
+    pkByteBuffer buff;
+	String* name = scr->names.data[scr->global_names.data[i]];
     Var value = scr->globals.data[i];
     printf("%10s = ", name->data);
 
     // Dump value. TODO: refactor.
-    pkByteBuffer buff;
     pkByteBufferInit(&buff);
     dumpValue(vm, value, &buff);
     pkByteBufferWrite(&buff, vm, '\0');
@@ -433,18 +448,21 @@ void dumpGlobalValues(PKVM* vm) {
 }
 
 void dumpStackFrame(PKVM* vm) {
+  Var* sp;
+  CallFrame* frame;
   Fiber* fiber = vm->fiber;
   int frame_ind = fiber->frame_count - 1;
   ASSERT(frame_ind >= 0, OOPS);
-  CallFrame* frame = &fiber->frames[frame_ind];
-  Var* sp = fiber->sp - 1;
+  frame = &fiber->frames[frame_ind];
+  sp = fiber->sp - 1;
 
   printf("Frame[%d]\n", frame_ind);
   for (; sp >= frame->rbp; sp--) {
-    printf("       ");
+    pkByteBuffer buff;
+
+	printf("       ");
 
     // Dump value. TODO: refactor.
-    pkByteBuffer buff;
     pkByteBufferInit(&buff);
     dumpValue(vm, *sp, &buff);
     pkByteBufferWrite(&buff, vm, '\0');

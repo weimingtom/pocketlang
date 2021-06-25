@@ -105,6 +105,18 @@ int argparse_help_cb(struct argparse *self,
                      const struct argparse_option *option);
 
 // built-in option macros
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define OPT_END()        { ARGPARSE_OPT_END, 0, NULL, NULL, 0, NULL, 0, 0 }
+#define OPT_BOOLEAN(p1, p2, p3, p4, p5, p6, p7)     { ARGPARSE_OPT_BOOLEAN, p1, p2, p3, p4, p5, p6, p7 }
+#define OPT_BIT(p1, p2, p3, p4, p5, p6, p7)     { ARGPARSE_OPT_BIT, p1, p2, p3, p4, p5, p6, p7 }
+#define OPT_INTEGER(p1, p2, p3, p4, p5, p6, p7)     { ARGPARSE_OPT_INTEGER, p1, p2, p3, p4, p5, p6, p7 }
+#define OPT_FLOAT(p1, p2, p3, p4, p5, p6, p7)     { ARGPARSE_OPT_FLOAT, p1, p2, p3, p4, p5, p6, p7 }
+#define OPT_STRING(p1, p2, p3, p4, p5, p6, p7)     { ARGPARSE_OPT_STRING, p1, p2, p3, p4, p5, p6, p7 }
+#define OPT_GROUP(h)     { ARGPARSE_OPT_GROUP, 0, NULL, NULL, h, NULL, 0, 0 }
+#define OPT_HELP()       OPT_BOOLEAN('h', "help", NULL,                 \
+                                     "show this help message and exit", \
+                                     argparse_help_cb, 0, OPT_NONEG)
+#else
 #define OPT_END()        { ARGPARSE_OPT_END, 0, NULL, NULL, 0, NULL, 0, 0 }
 #define OPT_BOOLEAN(...) { ARGPARSE_OPT_BOOLEAN, __VA_ARGS__ }
 #define OPT_BIT(...)     { ARGPARSE_OPT_BIT, __VA_ARGS__ }
@@ -115,6 +127,7 @@ int argparse_help_cb(struct argparse *self,
 #define OPT_HELP()       OPT_BOOLEAN('h', "help", NULL,                 \
                                      "show this help message and exit", \
                                      argparse_help_cb, 0, OPT_NONEG)
+#endif
 
 int argparse_init(struct argparse *self, struct argparse_option *options,
                   const char *const *usages, int flags);

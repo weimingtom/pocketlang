@@ -5,6 +5,10 @@
 
 #include "utils.h"
 
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define inline __inline
+#endif
+
 // The factor by which a buffer will grow when it's capacity reached.
 #define GROW_FACTOR 2
 
@@ -49,8 +53,9 @@ void byteBufferReserve(ByteBuffer* buffer, size_t size) {
 }
 
 void byteBufferFill(ByteBuffer* buffer, uint8_t data, int count) {
+  int i;
   byteBufferReserve(buffer, buffer->count + count);
-  for (int i = 0; i < count; i++) {
+  for (i = 0; i < count; i++) {
     buffer->data[buffer->count++] = data;
   }
 }
@@ -61,8 +66,9 @@ void byteBufferWrite(ByteBuffer* buffer, uint8_t data) {
 
 void byteBufferAddString(ByteBuffer* buffer, const char* str,
                          uint32_t length) {
+  uint32_t i;
   byteBufferReserve(buffer, buffer->count + length);
-  for (uint32_t i = 0; i < length; i++) {
+  for (i = 0; i < length; i++) {
     buffer->data[buffer->count++] = *(str++);
   }
 }

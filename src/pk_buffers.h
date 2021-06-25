@@ -76,10 +76,10 @@
                                                                               \
   void pk##m_name##BufferFill(pk##m_name##Buffer* self, PKVM* vm,             \
                               m_type data, int count) {                       \
-                                                                              \
+    int i;                                                                          \
     pk##m_name##BufferReserve(self, vm, self->count + count);                 \
                                                                               \
-    for (int i = 0; i < count; i++) {                                         \
+    for (i = 0; i < count; i++) {                                         \
       self->data[self->count++] = data;                                       \
     }                                                                         \
   }                                                                           \

@@ -38,6 +38,10 @@
 #include <errno.h>
 #include <ctype.h>
 
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+#define WINAPI_FAMILY_PARTITION(x) 1
+#endif
+
 /* Indicates that d_type field is available in dirent structure */
 #define _DIRENT_HAVE_D_TYPE
 
@@ -364,6 +368,14 @@ static void dirent_set_errno(int error);
  */
 static _WDIR *_wopendir(const wchar_t *dirname)
 {
+
+#if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
+	DWORD n;
+#else
+	size_t n;
+#endif
+
+	_WDIR *dirp;
 	wchar_t *p;
 
 	/* Must have directory name */
@@ -373,7 +385,7 @@ static _WDIR *_wopendir(const wchar_t *dirname)
 	}
 
 	/* Allocate new _WDIR structure */
-	_WDIR *dirp = (_WDIR*) malloc(sizeof(struct _WDIR));
+	dirp = (_WDIR*) malloc(sizeof(struct _WDIR));
 	if (!dirp)
 		return NULL;
 
@@ -390,10 +402,10 @@ static _WDIR *_wopendir(const wchar_t *dirname)
 	 */
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
 	/* Desktop */
-	DWORD n = GetFullPathNameW(dirname, 0, NULL, NULL);
+	n = GetFullPathNameW(dirname, 0, NULL, NULL);
 #else
 	/* WinRT */
-	size_t n = wcslen(dirname);
+	n = wcslen(dirname);
 #endif
 
 	/* Allocate room for absolute directory name and search pattern */
@@ -477,6 +489,8 @@ static struct _wdirent *_wreaddir(_WDIR *dirp)
 static int _wreaddir_r(
 	_WDIR *dirp, struct _wdirent *entry, struct _wdirent **result)
 {
+	DWORD attr;
+	size_t n;
 	/* Read next directory entry */
 	WIN32_FIND_DATAW *datap = dirent_next(dirp);
 	if (!datap) {
@@ -490,7 +504,7 @@ static int _wreaddir_r(
 	 * long to fit in to the destination buffer, then truncate file name
 	 * to PATH_MAX characters and zero-terminate the buffer.
 	 */
-	size_t n = 0;
+	n = 0;
 	while (n < PATH_MAX && datap->cFileName[n] != 0) {
 		entry->d_name[n] = datap->cFileName[n];
 		n++;
@@ -501,7 +515,7 @@ static int _wreaddir_r(
 	entry->d_namlen = n;
 
 	/* File type */
-	DWORD attr = datap->dwFileAttributes;
+	attr = datap->dwFileAttributes;
 	if ((attr & FILE_ATTRIBUTE_DEVICE) != 0)
 		entry->d_type = DT_CHR;
 	else if ((attr & FILE_ATTRIBUTE_DIRECTORY) != 0)
@@ -563,13 +577,20 @@ static void _wrewinddir(_WDIR* dirp)
 /* Get first directory entry */
 static WIN32_FIND_DATAW *dirent_first(_WDIR *dirp)
 {
+	DWORD errorcode;
+
 	if (!dirp)
 		return NULL;
 
 	/* Open directory and retrieve the first entry */
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+	dirp->handle = FindFirstFileW(
+		dirp->patt, &dirp->data);
+#else
 	dirp->handle = FindFirstFileExW(
 		dirp->patt, FindExInfoStandard, &dirp->data,
 		FindExSearchNameMatch, NULL, 0);
+#endif
 	if (dirp->handle == INVALID_HANDLE_VALUE)
 		goto error;
 
@@ -582,7 +603,7 @@ error:
 	dirp->cached = 0;
 
 	/* Set error code */
-	DWORD errorcode = GetLastError();
+	errorcode = GetLastError();
 	switch (errorcode) {
 	case ERROR_ACCESS_DENIED:
 		/* No read access to directory */
@@ -633,6 +654,11 @@ exit_close:
 /* Open directory stream using plain old C-string */
 static DIR *opendir(const char *dirname)
 {
+	struct DIR *dirp;
+	wchar_t wname[PATH_MAX + 1];
+	size_t n;
+	int error;
+	
 	/* Must have directory name */
 	if (dirname == NULL || dirname[0] == '\0') {
 		dirent_set_errno(ENOENT);
@@ -640,14 +666,12 @@ static DIR *opendir(const char *dirname)
 	}
 
 	/* Allocate memory for DIR structure */
-	struct DIR *dirp = (DIR*) malloc(sizeof(struct DIR));
+	dirp = (DIR*) malloc(sizeof(struct DIR));
 	if (!dirp)
 		return NULL;
 
 	/* Convert directory name to wide-character string */
-	wchar_t wname[PATH_MAX + 1];
-	size_t n;
-	int error = mbstowcs_s(&n, wname, PATH_MAX + 1, dirname, PATH_MAX+1);
+	error = mbstowcs_s(&n, wname, PATH_MAX + 1, dirname, PATH_MAX+1);
 	if (error)
 		goto exit_failure;
 
@@ -688,6 +712,9 @@ static struct dirent *readdir(DIR *dirp)
 static int readdir_r(
 	DIR *dirp, struct dirent *entry, struct dirent **result)
 {
+	size_t n;
+	int error;
+	
 	/* Read next directory entry */
 	WIN32_FIND_DATAW *datap = dirent_next(dirp->wdirp);
 	if (!datap) {
@@ -697,8 +724,7 @@ static int readdir_r(
 	}
 
 	/* Attempt to convert file name to multi-byte string */
-	size_t n;
-	int error = wcstombs_s(
+	error = wcstombs_s(
 		&n, entry->d_name, PATH_MAX + 1,
 		datap->cFileName, PATH_MAX + 1);
 
@@ -718,11 +744,13 @@ static int readdir_r(
 	}
 
 	if (!error) {
+		DWORD attr;
+
 		/* Length of file name excluding zero terminator */
 		entry->d_namlen = n - 1;
 
 		/* File attributes */
-		DWORD attr = datap->dwFileAttributes;
+		attr = datap->dwFileAttributes;
 		if ((attr & FILE_ATTRIBUTE_DEVICE) != 0)
 			entry->d_type = DT_CHR;
 		else if ((attr & FILE_ATTRIBUTE_DIRECTORY) != 0)
@@ -793,8 +821,13 @@ static int scandir(
 	int (*filter)(const struct dirent*),
 	int (*compare)(const struct dirent**, const struct dirent**))
 {
+	size_t i;
 	int result;
-
+    struct dirent *tmp = NULL;
+	struct dirent **files = NULL;
+	size_t size = 0;
+	size_t allocated = 0;
+	
 	/* Open directory stream */
 	DIR *dir = opendir(dirname);
 	if (!dir) {
@@ -803,11 +836,9 @@ static int scandir(
 	}
 
 	/* Read directory entries to memory */
-	struct dirent *tmp = NULL;
-	struct dirent **files = NULL;
-	size_t size = 0;
-	size_t allocated = 0;
 	while (1) {
+		struct dirent *entry;
+
 		/* Allocate room for a temporary directory entry */
 		if (!tmp) {
 			tmp = (struct dirent*) malloc(sizeof(struct dirent));
@@ -816,7 +847,6 @@ static int scandir(
 		}
 
 		/* Read directory entry to temporary area */
-		struct dirent *entry;
 		if (readdir_r(dir, tmp, &entry) != /*OK*/0)
 			goto exit_failure;
 
@@ -850,7 +880,7 @@ static int scandir(
 
 exit_failure:
 	/* Release allocated file entries */
-	for (size_t i = 0; i < size; i++) {
+	for (i = 0; i < size; i++) {
 		free(files[i]);
 	}
 
